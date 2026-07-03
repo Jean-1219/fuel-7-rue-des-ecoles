@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#185FA5">
+  <title>Fuel — 7 rue des Écoles</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #ffffff;
+      --bg2: #f5f5f3;
+      --bg3: #eeede9;
+      --text: #1a1a19;
+      --text2: #6b6b67;
+      --text3: #9b9b96;
+      --border: rgba(0,0,0,0.12);
+      --border2: rgba(0,0,0,0.2);
+      --blue: #185FA5;
+      --blue-bg: #E6F1FB;
+      --blue-text: #0C447C;
+      --amber-bg: #FAEEDA;
+      --amber-text: #633806;
+      --amber: #EF9F27;
+      --red: #E24B4A;
+      --red-bg: #FCEBEB;
+      --red-text: #791F1F;
+      --red-border: #F09595;
+      --warn-bg: #FAEEDA;
+      --warn-text: #633806;
+      --warn-border: #FAC775;
+      --green-bg: #EAF3DE;
+      --green-text: #27500A;
+      --green-border: #C0DD97;
+      --radius: 8px;
+      --radius-lg: 12px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1c1a;
+        --bg2: #242422;
+        --bg3: #2c2c2a;
+        --text: #f0efe9;
+        --text2: #b4b2a9;
+        --text3: #7a7a74;
+        --border: rgba(255,255,255,0.1);
+        --border2: rgba(255,255,255,0.2);
+        --blue-bg: #0c2440;
+        --blue-text: #85B7EB;
+        --amber-bg: #2c1f06;
+        --amber-text: #FAC775;
+        --red-bg: #2c0f0f;
+        --red-text: #F09595;
+        --red-border: #7a2020;
+        --warn-bg: #2c1f06;
+        --warn-text: #FAC775;
+        --warn-border: #633806;
+        --green-bg: #0f1f06;
+        --green-text: #C0DD97;
+        --green-border: #27500A;
+      }
+    }
+
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg3); color: var(--text); min-height: 100vh; }
+    .app { max-width: 720px; margin: 0 auto; padding: 1rem; }
+
+    .header { display: flex; align-items: center; gap: 10px; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 0.5px solid var(--border); }
+    .header h1 { font-size: 18px; font-weight: 500; }
+    .header .flame { font-size: 22px; }
+    .header small { font-size: 12px; color: var(--text3); margin-left: auto; }
+
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 1rem; }
+    .metric { background: var(--bg2); border-radius: var(--radius); padding: .8rem 1rem; }
+    .metric-label { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
+    .metric-value { font-size: 19px; font-weight: 500; }
+    .metric-unit { font-size: 11px; color: var(--text2); }
+
+    .alert-banner { border-radius: var(--radius); padding: .75rem 1rem; margin-bottom: 1rem; display: flex; align-items: flex-start; gap: 10px; font-size: 13px; }
+    .alert-danger { background: var(--red-bg); color: var(--red-text); border: 0.5px solid var(--red-border); }
+    .alert-warning { background: var(--warn-bg); color: var(--warn-text); border: 0.5px solid var(--warn-border); }
+
+    .section { background: var(--bg); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    .section-title { font-size: 13px; font-weight: 500; color: var(--text2); margin-bottom: 1rem; display: flex; align-items: center; gap: 6px; }
+
+    .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+    .tab { flex: 1; padding: 8px; border: 0.5px solid var(--border2); border-radius: var(--radius); text-align: center; font-size: 13px; cursor: pointer; color: var(--text2); background: var(--bg); transition: all .15s; }
+    .tab.active { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+    .form-grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+    .fg { display: flex; flex-direction: column; gap: 4px; }
+    .fg label { font-size: 12px; color: var(--text2); }
+    .fg input { padding: 8px 10px; border: 0.5px solid var(--border2); border-radius: var(--radius); font-size: 14px; background: var(--bg); color: var(--text); width: 100%; }
+    .fg input:focus { outline: none; border-color: var(--blue); }
+
+    .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+    .btn { padding: 9px 16px; border-radius: var(--radius); border: 0.5px solid var(--border2); cursor: pointer; font-size: 13px; background: var(--bg); color: var(--text); display: flex; align-items: center; gap: 5px; transition: background .15s; }
+    .btn:hover { background: var(--bg2); }
+    .btn-primary { flex: 1; justify-content: center; }
+
+    .seuil-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text2); flex-wrap: wrap; }
+    .seuil-row input { width: 72px; padding: 7px 10px; border: 0.5px solid var(--border2); border-radius: var(--radius); font-size: 14px; background: var(--bg); color: var(--text); }
+
+    .legend { display: flex; gap: 16px; margin-bottom: 10px; font-size: 12px; color: var(--text2); flex-wrap: wrap; }
+    .legend-item { display: flex; align-items: center; gap: 4px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+    .chart-wrap { position: relative; width: 100%; }
+
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; font-size: 12px; border-collapse: collapse; table-layout: fixed; }
+    th { text-align: left; color: var(--text2); font-weight: 500; padding: 6px 5px; border-bottom: 0.5px solid var(--border); }
+    td { padding: 6px 5px; border-bottom: 0.5px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 99px; font-size: 11px; font-weight: 500; }
+    .b-blue { background: var(--blue-bg); color: var(--blue-text); }
+    .b-amber { background: var(--amber-bg); color: var(--amber-text); }
+    .btn-del { background: none; border: none; cursor: pointer; color: var(--text3); font-size: 15px; padding: 2px 4px; }
+    .btn-del:hover { color: var(--red); }
+
+    .empty { text-align: center; color: var(--text3); font-size: 13px; padding: 1.5rem 0; }
+    .sync-info { font-size: 11px; color: var(--text3); text-align: right; margin-top: .5rem; }
+    .conv-ref { font-size: 11px; color: var(--text3); margin-top: .5rem; text-align: right; }
+    .loading { text-align: center; color: var(--text2); font-size: 13px; padding: 2rem 0; }
+
+    @media (max-width: 500px) {
+      .form-grid, .form-grid3 { grid-template-columns: 1fr; }
+      .header small { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <div class="header">
+    <span class="flame">🔥</span>
+    <h1>Fuel — 7 rue des Écoles</h1>
+    <small>21 cm = 500 L &nbsp;|&nbsp; 30 cm = 800 L</small>
+  </div>
+
+  <div id="alert-zone"></div>
+
+  <div class="metrics">
+    <div class="metric"><div class="metric-label">Niveau actuel</div><div class="metric-value" id="m-cm">—</div><div class="metric-unit" id="m-cm-l"></div></div>
+    <div class="metric"><div class="metric-label">Dernier relevé</div><div class="metric-value" id="m-date" style="font-size:14px;padding-top:4px">—</div></div>
+    <div class="metric"><div class="metric-label">Autonomie estimée</div><div class="metric-value" id="m-auto">—</div><div class="metric-unit" id="m-auto-date"></div></div>
+    <div class="metric"><div class="metric-label">Conso moy. (L/j)</div><div class="metric-value" id="m-conso">—</div><div class="metric-unit">toute période</div></div>
+    <div class="metric"><div class="metric-label">Total livré</div><div class="metric-value" id="m-livre">—</div><div class="metric-unit">litres</div></div>
+    <div class="metric"><div class="metric-label">Coût total estimé</div><div class="metric-value" id="m-cout">—</div><div class="metric-unit">€</div></div>
+  </div>
+
+  <!-- Seuil alerte -->
+  <div class="section">
+    <div class="section-title">🔔 Alerte seuil bas</div>
+    <div class="seuil-row">
+      <label for="seuil-input">Déclencher l'alerte en dessous de</label>
+      <input type="number" id="seuil-input" min="0" max="100" step="0.5" value="15">
+      <span>cm &nbsp;(≈ <span id="seuil-l-equiv">357</span> L)</span>
+      <button class="btn" onclick="saveSeuil()" style="margin-left:auto">✓ Appliquer</button>
+    </div>
+  </div>
+
+  <!-- Saisie -->
+  <div class="section">
+    <div class="section-title">➕ Nouvelle saisie</div>
+    <div class="tabs">
+      <div class="tab active" id="tab-niveau" onclick="switchTab('niveau')">📏 Relevé (cm)</div>
+      <div class="tab" id="tab-livraison" onclick="switchTab('livraison')">🚚 Livraison</div>
+    </div>
+    <div id="row-niveau">
+      <div class="form-grid">
+        <div class="fg"><label>Date</label><input type="date" id="f-date"></div>
+        <div class="fg"><label>Mesure (cm)</label><input type="number" id="f-cm" placeholder="ex : 30" min="0" step="0.5"></div>
+      </div>
+    </div>
+    <div id="row-livraison" style="display:none">
+      <div class="form-grid3">
+        <div class="fg"><label>Date</label><input type="date" id="f-date2"></div>
+        <div class="fg"><label>Quantité (L)</label><input type="number" id="f-qty" placeholder="ex : 1000" min="0"></div>
+        <div class="fg"><label>Prix/litre (€)</label><input type="number" id="f-prix" placeholder="ex : 1.08" min="0" step="0.01"></div>
+      </div>
+    </div>
+    <div class="fg" style="margin-bottom:12px"><label>Note (optionnel)</label><input type="text" id="f-note" placeholder="Remarque..."></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="addEntry()">✓ Enregistrer</button>
+      <button class="btn" onclick="exportCSV()">⬇ Export CSV</button>
+    </div>
+  </div>
+
+  <!-- Graphique niveau -->
+  <div class="section">
+    <div class="section-title">📈 Évolution du niveau</div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#185FA5"></div>Niveau (L)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#EF9F27"></div>Livraison</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#E24B4A"></div>Seuil alerte</div>
+    </div>
+    <div class="chart-wrap" style="height:220px"><canvas id="chartNiveau"></canvas></div>
+  </div>
+
+  <!-- Graphique annuel -->
+  <div class="section">
+    <div class="section-title">📊 Consommation annuelle</div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#185FA5"></div>Conso (L)</div>
+      <div class="legend-item"><div class="legend-dot" style="border:1.5px dashed #888;width:10px;height:10px;border-radius:2px"></div>Moy. globale</div>
+    </div>
+    <div class="chart-wrap" style="height:200px"><canvas id="chartAnnuel"></canvas></div>
+    <div style="margin-top:1rem">
+      <table>
+        <thead><tr>
+          <th style="width:60px">Année</th>
+          <th style="width:88px">Conso (L)</th>
+          <th style="width:76px">L/jour</th>
+          <th style="width:80px">Livré (L)</th>
+          <th style="width:76px">Coût (€)</th>
+          <th>Note</th>
+        </tr></thead>
+        <tbody id="tbody-annuel"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Historique -->
+  <div class="section">
+    <div class="section-title">📋 Historique des saisies</div>
+    <div id="loading-msg" class="loading">Chargement…</div>
+    <div class="table-wrap" id="table-zone" style="display:none">
+      <table>
+        <thead><tr>
+          <th style="width:80px">Date</th>
+          <th style="width:72px">Type</th>
+          <th style="width:65px">Mesure</th>
+          <th style="width:58px">Litres</th>
+          <th style="width:55px">L/jour</th>
+          <th style="width:52px">€/L</th>
+          <th style="width:80px">Note</th>
+          <th style="width:28px"></th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="empty" id="empty-msg" style="display:none">Aucune saisie.</div>
+    </div>
+  </div>
+
+  <div class="conv-ref">Conversion : 21 cm = 500 L — 30 cm = 800 L (interpolation linéaire)</div>
+  <div class="sync-info" id="sync-label">Chargement…</div>
+</div>
+
+<script>
+// ── Configuration Supabase ──────────────────────────────────
+const SUPABASE_URL = 'https://tqurezznmkhvzbktwnnz.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRxdXJlenpubWtodnpia3R3bm56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTg5ODAsImV4cCI6MjA5NjE5NDk4MH0.uBhhMzibGzWmiXoSxfZwLSPiORCjrGmO1TFbtoCWzeU';
+const HEADERS = { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
+
+async function sbGet(table) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?order=date.asc,id.asc`, { headers: HEADERS });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbInsert(table, data) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, { method: 'POST', headers: HEADERS, body: JSON.stringify(data) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbDelete(table, id) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, { method: 'DELETE', headers: HEADERS });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+// ── État ────────────────────────────────────────────────────
+let releves = [], livraisons = [], seuilCm = 15;
+let chartNiveau = null, chartAnnuel = null;
+let currentTab = 'niveau';
+const SEUIL_KEY = 'fuel_seuil_cm';
+
+// ── Conversion ──────────────────────────────────────────────
+function cmToL(cm) {
+  if (cm === null || cm === undefined || isNaN(cm)) return null;
+  return Math.round(500 + (cm - 21) * (300 / 9));
+}
+function lToCm(l) { return ((l - 500) * (9 / 300) + 21).toFixed(1); }
+
+// ── Formatage dates ─────────────────────────────────────────
+function fmt(d) {
+  return new Date(d + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+function fmtLong(d) {
+  return new Date(d + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
+// ── Tabs ────────────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tab-niveau').classList.toggle('active', tab === 'niveau');
+  document.getElementById('tab-livraison').classList.toggle('active', tab === 'livraison');
+  document.getElementById('row-niveau').style.display = tab === 'niveau' ? '' : 'none';
+  document.getElementById('row-livraison').style.display = tab === 'livraison' ? '' : 'none';
+}
+
+// ── Seuil ───────────────────────────────────────────────────
+document.getElementById('seuil-input').addEventListener('input', function () {
+  const v = parseFloat(this.value);
+  if (!isNaN(v) && v >= 0) {
+    const l = cmToL(v);
+    document.getElementById('seuil-l-equiv').textContent = l !== null ? l.toLocaleString('fr-FR') : '—';
+  }
+});
+function saveSeuil() {
+  const v = parseFloat(document.getElementById('seuil-input').value);
+  if (isNaN(v) || v < 0) return;
+  seuilCm = v;
+  localStorage.setItem(SEUIL_KEY, v);
+  render();
+}
+function loadSeuil() {
+  const saved = localStorage.getItem(SEUIL_KEY);
+  if (saved !== null) seuilCm = parseFloat(saved);
+  document.getElementById('seuil-input').value = seuilCm;
+  document.getElementById('seuil-l-equiv').textContent = cmToL(seuilCm).toLocaleString('fr-FR');
+}
+
+// ── Chargement données ──────────────────────────────────────
+async function loadData() {
+  try {
+    setSyncLabel('Chargement…');
+    [releves, livraisons] = await Promise.all([sbGet('releves'), sbGet('livraisons')]);
+    setSyncLabel('Synchronisé ✓');
+    document.getElementById('loading-msg').style.display = 'none';
+    document.getElementById('table-zone').style.display = '';
+    render();
+  } catch (e) {
+    setSyncLabel('Erreur : ' + e.message);
+    document.getElementById('loading-msg').textContent = 'Erreur de chargement. Vérifiez la connexion.';
+  }
+}
+
+function setSyncLabel(txt) { document.getElementById('sync-label').textContent = txt; }
+
+// ── Ajout entrée ────────────────────────────────────────────
+async function addEntry() {
+  try {
+    setSyncLabel('Enregistrement…');
+    if (currentTab === 'niveau') {
+      const date = document.getElementById('f-date').value;
+      const cm = parseFloat(document.getElementById('f-cm').value);
+      const note = document.getElementById('f-note').value.trim();
+      if (!date || isNaN(cm)) { alert('Date et mesure requises.'); return; }
+      const res = await sbInsert('releves', { date, cm, note });
+      releves.push(res[0]);
+      releves.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+      document.getElementById('f-cm').value = '';
+    } else {
+      const date = document.getElementById('f-date2').value;
+      const qty = parseInt(document.getElementById('f-qty').value);
+      const prix = parseFloat(document.getElementById('f-prix').value) || null;
+      const note = document.getElementById('f-note').value.trim();
+      if (!date || isNaN(qty)) { alert('Date et quantité requises.'); return; }
+      const res = await sbInsert('livraisons', { date, qty, prix, note });
+      livraisons.push(res[0]);
+      livraisons.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+      document.getElementById('f-qty').value = '';
+      document.getElementById('f-prix').value = '';
+    }
+    document.getElementById('f-note').value = '';
+    setSyncLabel('Synchronisé ✓');
+    render();
+  } catch (e) { setSyncLabel('Erreur : ' + e.message); }
+}
+
+// ── Suppression ─────────────────────────────────────────────
+async function deleteEntry(type, id) {
+  if (!confirm('Supprimer cette entrée ?')) return;
+  try {
+    setSyncLabel('Suppression…');
+    await sbDelete(type === 'niveau' ? 'releves' : 'livraisons', id);
+    if (type === 'niveau') releves = releves.filter(e => e.id !== id);
+    else livraisons = livraisons.filter(e => e.id !== id);
+    setSyncLabel('Synchronisé ✓');
+    render();
+  } catch (e) { setSyncLabel('Erreur : ' + e.message); }
+}
+
+// ── Export CSV ──────────────────────────────────────────────
+function exportCSV() {
+  const all = buildMerged();
+  let csv = 'Date;Type;Mesure (cm);Litres estimés;Conso (L/j);Qté livrée (L);Prix/L (€);Note\n';
+  all.forEach(e => {
+    const litres = e.type === 'niveau' ? cmToL(e.cm) : '';
+    const conso = e.type === 'niveau' ? computeConso(e, all) : '';
+    csv += `${e.date};${e.type === 'niveau' ? 'Relevé' : 'Livraison'};${e.type === 'niveau' ? e.cm : ''};${litres};${conso !== null && conso !== '' ? conso.toFixed(1) : ''};${e.type === 'livraison' ? e.qty : ''};${e.prix || ''};${e.note || ''}\n`;
+  });
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'fuel_7rueecoles.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Merge relevés + livraisons triés par date ───────────────
+function buildMerged() {
+  const all = [
+    ...releves.map(e => ({ ...e, type: 'niveau' })),
+    ...livraisons.map(e => ({ ...e, type: 'livraison' }))
+  ];
+  all.sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+  return all;
+}
+
+// ── Calcul consommation entre deux relevés ──────────────────
+function computeConso(entry, merged) {
+  if (entry.type !== 'niveau') return null;
+  const idx = merged.indexOf(entry); let prev = null;
+  for (let i = idx - 1; i >= 0; i--) { if (merged[i].type === 'niveau') { prev = merged[i]; break; } }
+  if (!prev) return null;
+  const days = (new Date(entry.date) - new Date(prev.date)) / 86400000;
+  if (days <= 0) return null;
+  let liv = 0;
+  merged.forEach(e => { if (e.type === 'livraison' && e.date > prev.date && e.date <= entry.date) liv += e.qty; });
+  const c = (cmToL(prev.cm) + liv - cmToL(entry.cm)) / days;
+  return c < 0 ? null : c;
+}
+
+function computeGlobalConsoPerDay(merged) {
+  const niveaux = merged.filter(e => e.type === 'niveau');
+  let tc = 0, td = 0;
+  for (let i = 1; i < niveaux.length; i++) {
+    const p = niveaux[i - 1], c = niveaux[i], days = (new Date(c.date) - new Date(p.date)) / 86400000;
+    let liv = 0;
+    merged.forEach(e => { if (e.type === 'livraison' && e.date > p.date && e.date <= c.date) liv += e.qty; });
+    const conso = cmToL(p.cm) + liv - cmToL(c.cm);
+    if (conso >= 0 && days > 0) { tc += conso; td += days; }
+  }
+  return td > 0 ? tc / td : null;
+}
+
+function computeAnnuel(merged) {
+  const niveaux = merged.filter(e => e.type === 'niveau');
+  const byYear = {};
+  for (let i = 1; i < niveaux.length; i++) {
+    const prev = niveaux[i - 1], cur = niveaux[i], days = (new Date(cur.date) - new Date(prev.date)) / 86400000;
+    if (days <= 0) continue;
+    let liv = 0;
+    merged.forEach(e => { if (e.type === 'livraison' && e.date > prev.date && e.date <= cur.date) liv += e.qty; });
+    const conso = cmToL(prev.cm) + liv - cmToL(cur.cm); if (conso < 0) continue;
+    const yr = cur.date.slice(0, 4);
+    if (!byYear[yr]) byYear[yr] = { conso: 0, days: 0, livré: 0, cout: 0 };
+    byYear[yr].conso += conso; byYear[yr].days += days;
+  }
+  merged.filter(e => e.type === 'livraison').forEach(e => {
+    const yr = e.date.slice(0, 4);
+    if (!byYear[yr]) byYear[yr] = { conso: 0, days: 0, livré: 0, cout: 0 };
+    byYear[yr].livré = (byYear[yr].livré || 0) + e.qty;
+    if (e.prix) byYear[yr].cout = (byYear[yr].cout || 0) + e.qty * e.prix;
+  });
+  return byYear;
+}
+
+// ── Rendu principal ─────────────────────────────────────────
+function render() {
+  const merged = buildMerged();
+  const niveaux = merged.filter(e => e.type === 'niveau');
+  const tbody = document.getElementById('tbody'), emptyMsg = document.getElementById('empty-msg');
+  tbody.innerHTML = '';
+  emptyMsg.style.display = merged.length === 0 ? '' : 'none';
+  [...merged].reverse().forEach(e => {
+    const litres = e.type === 'niveau' ? cmToL(e.cm) : null;
+    const conso = computeConso(e, merged);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${fmt(e.date)}</td><td><span class="badge ${e.type === 'niveau' ? 'b-blue' : 'b-amber'}">${e.type === 'niveau' ? 'Relevé' : 'Livraison'}</span></td><td>${e.type === 'niveau' ? e.cm + ' cm' : (e.qty.toLocaleString('fr-FR') + ' L')}</td><td>${litres !== null ? litres.toLocaleString('fr-FR') + ' L' : '—'}</td><td>${conso !== null ? conso.toFixed(1) : '—'}</td><td>${e.prix ? e.prix.toFixed(2) + ' €' : '—'}</td><td style="color:var(--text2)">${e.note || ''}</td><td><button class="btn-del" onclick="deleteEntry('${e.type}',${e.id})">🗑</button></td>`;
+    tbody.appendChild(tr);
+  });
+  updateMetrics(merged);
+  updateAlert(merged);
+  updateChartNiveau(merged);
+  updateChartAnnuel(merged);
+}
+
+function updateMetrics(merged) {
+  const niveaux = merged.filter(e => e.type === 'niveau');
+  const livs = merged.filter(e => e.type === 'livraison');
+  const last = niveaux[niveaux.length - 1];
+  const consoJour = computeGlobalConsoPerDay(merged);
+  if (last) {
+    const l = cmToL(last.cm);
+    document.getElementById('m-cm').textContent = last.cm + ' cm';
+    document.getElementById('m-cm-l').textContent = '≈ ' + (l !== null ? l.toLocaleString('fr-FR') + ' L' : '—');
+    document.getElementById('m-date').textContent = fmt(last.date);
+    if (consoJour && l !== null) {
+      const j = Math.floor(l / consoJour);
+      document.getElementById('m-auto').textContent = j + ' j';
+      const de = new Date(); de.setDate(de.getDate() + j);
+      document.getElementById('m-auto-date').textContent = '≈ ' + fmtLong(de.toISOString().slice(0, 10));
+    } else { document.getElementById('m-auto').textContent = '—'; document.getElementById('m-auto-date').textContent = ''; }
+  }
+  document.getElementById('m-conso').textContent = consoJour ? consoJour.toFixed(1) : '—';
+  document.getElementById('m-livre').textContent = livs.reduce((s, e) => s + e.qty, 0).toLocaleString('fr-FR');
+  const cout = livs.filter(e => e.prix).reduce((s, e) => s + e.qty * e.prix, 0);
+  document.getElementById('m-cout').textContent = cout > 0 ? cout.toLocaleString('fr-FR', { maximumFractionDigits: 0 }) : '—';
+}
+
+function updateAlert(merged) {
+  const niveaux = merged.filter(e => e.type === 'niveau');
+  const last = niveaux[niveaux.length - 1];
+  const zone = document.getElementById('alert-zone');
+  if (!last) { zone.innerHTML = ''; return; }
+  const lastCm = last.cm, seuilL = cmToL(seuilCm), lastL = cmToL(lastCm);
+  const consoJour = computeGlobalConsoPerDay(merged);
+  let html = '';
+  if (lastCm <= seuilCm) {
+    const j = consoJour && lastL ? Math.floor(lastL / consoJour) : null;
+    const urgence = j !== null && j < 15;
+    html = `<div class="alert-banner ${urgence ? 'alert-danger' : 'alert-warning'}"><span style="font-size:18px;flex-shrink:0">${urgence ? '🚨' : '⚠️'}</span><div><strong>${urgence ? 'Niveau critique' : 'Niveau bas'}</strong> — ${lastCm} cm (seuil : ${seuilCm} cm ≈ ${seuilL} L)${j !== null ? ' — autonomie estimée : ' + j + ' jour(s).' : ''}</div></div>`;
+  } else if (consoJour) {
+    const joursAvantSeuil = Math.floor((lastL - seuilL) / consoJour);
+    if (joursAvantSeuil < 30) {
+      html = `<div class="alert-banner alert-warning"><span style="font-size:18px;flex-shrink:0">⚠️</span><div>Le seuil de <strong>${seuilCm} cm</strong> sera atteint dans environ <strong>${joursAvantSeuil} jours</strong>. Pensez à commander.</div></div>`;
+    }
+  }
+  zone.innerHTML = html;
+}
+
+function updateChartNiveau(merged) {
+  const isDark = matchMedia('(prefers-color-scheme:dark)').matches;
+  const tc = isDark ? '#B4B2A9' : '#888780', gc = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+  const niveaux = merged.filter(e => e.type === 'niveau'); if (!niveaux.length) return;
+  const labels = niveaux.map(e => fmt(e.date)), data = niveaux.map(e => cmToL(e.cm));
+  const livData = new Array(niveaux.length).fill(null);
+  merged.filter(e => e.type === 'livraison').forEach(e => {
+    let idx = niveaux.findIndex(n => n.date > e.date);
+    if (idx < 0) idx = niveaux.length - 1; else if (idx > 0) idx--;
+    livData[idx] = (livData[idx] || 0) + e.qty;
+  });
+  const seuilData = niveaux.map(() => cmToL(seuilCm));
+  if (chartNiveau) chartNiveau.destroy();
+  chartNiveau = new Chart(document.getElementById('chartNiveau'), {
+    type: 'line', data: { labels, datasets: [
+      { label: 'Niveau (L)', data, borderColor: '#185FA5', backgroundColor: 'rgba(55,138,221,0.08)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#185FA5', borderWidth: 2, yAxisID: 'y' },
+      { label: 'Livraison (L)', data: livData, type: 'bar', backgroundColor: 'rgba(239,159,39,0.45)', borderColor: '#EF9F27', borderWidth: 1, borderRadius: 3, yAxisID: 'y2' },
+      { label: 'Seuil', data: seuilData, borderColor: '#E24B4A', borderDash: [4, 3], borderWidth: 1.5, pointRadius: 0, fill: false, yAxisID: 'y' }
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ' : ' + (ctx.parsed.y !== null ? ctx.parsed.y.toLocaleString('fr-FR') + ' L' : '') } } }, scales: { x: { ticks: { color: tc, maxRotation: 45, font: { size: 11 } }, grid: { color: gc } }, y: { ticks: { color: tc, callback: v => v.toLocaleString('fr-FR') + ' L', font: { size: 11 } }, grid: { color: gc }, beginAtZero: true, position: 'left' }, y2: { ticks: { color: '#BA7517', font: { size: 10 }, callback: v => v ? v + 'L' : '' }, grid: { display: false }, beginAtZero: true, position: 'right', max: 2000 } } }
+  });
+}
+
+function updateChartAnnuel(merged) {
+  const isDark = matchMedia('(prefers-color-scheme:dark)').matches;
+  const tc = isDark ? '#B4B2A9' : '#888780', gc = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+  const byYear = computeAnnuel(merged), years = Object.keys(byYear).sort();
+  const consoData = years.map(y => byYear[y].conso ? Math.round(byYear[y].conso) : null);
+  const valid = consoData.filter(v => v !== null && v > 0), moy = valid.length ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
+  if (chartAnnuel) chartAnnuel.destroy();
+  if (!years.length) return;
+  chartAnnuel = new Chart(document.getElementById('chartAnnuel'), {
+    type: 'bar', data: { labels: years, datasets: [
+      { label: 'Conso (L)', data: consoData, backgroundColor: 'rgba(55,138,221,0.55)', borderColor: '#185FA5', borderWidth: 1.5, borderRadius: 4 },
+      { label: 'Moy.', data: years.map(() => moy), type: 'line', borderColor: '#888780', borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0, fill: false }
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ' : ' + (ctx.parsed.y !== null ? ctx.parsed.y.toLocaleString('fr-FR') + ' L' : '—') } } }, scales: { x: { ticks: { color: tc, font: { size: 12 } }, grid: { color: gc } }, y: { ticks: { color: tc, callback: v => v.toLocaleString('fr-FR') + ' L', font: { size: 11 } }, grid: { color: gc }, beginAtZero: true } } }
+  });
+  const tbody = document.getElementById('tbody-annuel'); tbody.innerHTML = '';
+  years.slice().reverse().forEach(yr => {
+    const d = byYear[yr], conso = d.conso ? Math.round(d.conso) : null, ljour = d.conso && d.days ? (d.conso / d.days).toFixed(1) : null, partiel = !d.days || d.days < 300;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td style="font-weight:500">${yr}${partiel ? '*' : ''}</td><td>${conso !== null ? conso.toLocaleString('fr-FR') + ' L' : '—'}</td><td>${ljour ? ljour + ' L/j' : '—'}</td><td>${d.livré ? d.livré.toLocaleString('fr-FR') + ' L' : '—'}</td><td>${d.cout ? d.cout.toLocaleString('fr-FR', { maximumFractionDigits: 0 }) + ' €' : '—'}</td><td style="color:var(--text3);font-size:11px">${partiel ? 'données partielles' : ''}</td>`;
+    tbody.appendChild(tr);
+  });
+  if (moy) { const tr = document.createElement('tr'); tr.style.borderTop = '1px solid var(--border)'; tr.innerHTML = `<td style="font-weight:500;color:var(--text2)">Moy.</td><td style="font-weight:500">${moy.toLocaleString('fr-FR')} L</td><td style="font-weight:500">${(moy / 365).toFixed(1)} L/j</td><td colspan="3"></td>`; tbody.appendChild(tr); }
+}
+
+// ── Init ────────────────────────────────────────────────────
+document.getElementById('f-date').value = new Date().toISOString().slice(0, 10);
+document.getElementById('f-date2').value = new Date().toISOString().slice(0, 10);
+loadSeuil();
+loadData();
+
+// Rafraîchissement toutes les 30 secondes
+setInterval(loadData, 30000);
+
+// ── PWA Service Worker ──────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
