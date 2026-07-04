@@ -19,3 +19,7 @@
   for = "/manifest.json"
   [headers.values]
     Content-Type = "application/manifest+json"
+
+# Déclenchement automatique chaque lundi à 8h00 (heure Paris)
+[functions."fetch-prix-fioul"]
+  schedule = "0 7 * * 1"
