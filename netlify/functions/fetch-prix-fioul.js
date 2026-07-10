@@ -1,6 +1,5 @@
-// Fonction Netlify : récupère les prix hebdomadaires du fioul domestique pour la France
-// Source : CSV public GitHub (Weekly Oil Bulletin EU) — aucune restriction d'accès
-// Déclenché chaque lundi à 8h (cron) ou manuellement via le bouton Actualiser
+// Fonction Netlify : récupère les prix hebdomadaires du fioul domestique
+// Source : fioulmarket.fr (données DGEC republiques, accès libre)
 
 const fetch = require('node-fetch');
 
@@ -14,9 +13,6 @@ const HEADERS_SB = {
   'Prefer': 'resolution=merge-duplicates'
 };
 
-// CSV public — Weekly Oil Bulletin EU, mis à jour automatiquement chaque semaine
-const CSV_URL = 'https://raw.githubusercontent.com/the-Hull/weekly_oil_bulletin/main/data/db/WOB.csv';
-
 exports.handler = async (event, context) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -25,86 +21,101 @@ exports.handler = async (event, context) => {
   };
 
   try {
-    console.log('Téléchargement du CSV Weekly Oil Bulletin...');
+    console.log('Scraping fioulmarket.fr...');
 
-    const response = await fetch(CSV_URL, { timeout: 15000 });
-    if (!response.ok) throw new Error(`CSV inaccessible : HTTP ${response.status}`);
+    const response = await fetch('https://www.fioulmarket.fr/evolution-prix-fioul', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'fr-FR,fr;q=0.9'
+      },
+      timeout: 15000
+    });
 
-    const text = await response.text();
-    const lines = text.split('\n').filter(l => l.trim());
-    if (lines.length < 2) throw new Error('CSV vide');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-    // Parser l'en-tête
-    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-    console.log('Colonnes CSV :', headers.join(', '));
+    const html = await response.text();
 
-    // Trouver les colonnes utiles
-    // Format attendu : date, Geo, Product Name, tax, values
-    const idxDate    = headers.findIndex(h => h.toLowerCase().includes('date'));
-    const idxGeo     = headers.findIndex(h => h.toLowerCase().includes('geo') || h.toLowerCase().includes('country'));
-    const idxProduct = headers.findIndex(h => h.toLowerCase().includes('product'));
-    const idxTax     = headers.findIndex(h => h.toLowerCase().includes('tax'));
-    const idxValue   = headers.findIndex(h => h.toLowerCase().includes('value') || h.toLowerCase() === 'values');
-
-    console.log(`Colonnes : date=${idxDate} geo=${idxGeo} product=${idxProduct} tax=${idxTax} value=${idxValue}`);
-
-    if (idxDate < 0 || idxValue < 0) throw new Error('Colonnes date/value introuvables dans le CSV');
-
+    // Extraire les données JSON intégrées dans la page (chart.js ou script JSON)
+    const prixFioul = [];
     const sixMoisAgo = new Date();
     sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
 
-    const prixFioul = [];
-
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
-      if (cols.length < Math.max(idxDate, idxValue) + 1) continue;
-
-      // Filtrer : France + Heating gas oil/FOD + avec taxes (TTC)
-      if (idxGeo >= 0) {
-        const geo = (cols[idxGeo] || '').toLowerCase();
-        if (!geo.includes('france') && !geo.includes('fr')) continue;
-      }
-      if (idxProduct >= 0) {
-        const prod = (cols[idxProduct] || '').toLowerCase();
-        if (!prod.includes('heat') && !prod.includes('fioul') && !prod.includes('fod') && !prod.includes('gas oil')) continue;
-      }
-      if (idxTax >= 0) {
-        const tax = (cols[idxTax] || '').toLowerCase();
-        // Garder seulement les prix TTC (with taxes)
-        if (tax.includes('without') || tax.includes('hors') || tax.includes('ht')) continue;
-      }
-
-      const dateStr = cols[idxDate];
-      if (!dateStr || !/\d{4}/.test(dateStr)) continue;
-
-      const date = new Date(dateStr);
+    // Chercher les tableaux de données au format [date, prix] dans les scripts
+    const jsonMatches = html.matchAll(/\[["'](\d{4}-\d{2}-\d{2})["'],\s*([\d.]+)\]/g);
+    for (const m of jsonMatches) {
+      const date = new Date(m[1]);
       if (isNaN(date) || date < sixMoisAgo) continue;
-
-      let val = parseFloat(cols[idxValue]);
-      if (isNaN(val) || val <= 0) continue;
-
-      // Les valeurs EU sont en €/1000L → convertir en €/L
-      if (val > 10) val = val / 1000;
-
-      prixFioul.push({
-        date: date.toISOString().slice(0, 10),
-        prix_litre: Math.round(val * 10000) / 10000
-      });
+      let prix = parseFloat(m[2]);
+      if (isNaN(prix) || prix <= 0) continue;
+      if (prix > 10) prix = prix / 1000;
+      prixFioul.push({ date: m[1], prix_litre: Math.round(prix * 10000) / 10000 });
     }
 
-    console.log(`${prixFioul.length} entrées France fioul trouvées`);
+    // Fallback : chercher format ["DD/MM/YYYY", prix]
+    if (prixFioul.length === 0) {
+      const matches2 = html.matchAll(/["'](\d{2})\/(\d{2})\/(\d{4})["'],\s*([\d.]+)/g);
+      for (const m of matches2) {
+        const dateStr = `${m[3]}-${m[2]}-${m[1]}`;
+        const date = new Date(dateStr);
+        if (isNaN(date) || date < sixMoisAgo) continue;
+        let prix = parseFloat(m[4]);
+        if (isNaN(prix) || prix <= 0) continue;
+        if (prix > 10) prix = prix / 1000;
+        prixFioul.push({ date: dateStr, prix_litre: Math.round(prix * 10000) / 10000 });
+      }
+    }
+
+    // Fallback 2 : chercher les données dans une variable JS type labels/data
+    if (prixFioul.length === 0) {
+      const labelsMatch = html.match(/labels\s*[:=]\s*\[([^\]]+)\]/);
+      const dataMatch = html.match(/data\s*[:=]\s*\[([^\]]+)\]/);
+      if (labelsMatch && dataMatch) {
+        const labels = labelsMatch[1].match(/["']([^"']+)["']/g) || [];
+        const vals = dataMatch[1].match(/[\d.]+/g) || [];
+        labels.forEach((l, i) => {
+          const dateRaw = l.replace(/["']/g, '').trim();
+          let dateStr = null;
+          const mFR = dateRaw.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          const mISO = dateRaw.match(/(\d{4}-\d{2}-\d{2})/);
+          if (mFR) dateStr = `${mFR[3]}-${mFR[2]}-${mFR[1]}`;
+          else if (mISO) dateStr = mISO[1];
+          if (!dateStr) return;
+          const date = new Date(dateStr);
+          if (isNaN(date) || date < sixMoisAgo) return;
+          let prix = parseFloat(vals[i] || '0');
+          if (isNaN(prix) || prix <= 0) return;
+          if (prix > 10) prix = prix / 1000;
+          prixFioul.push({ date: dateStr, prix_litre: Math.round(prix * 10000) / 10000 });
+        });
+      }
+    }
+
+    console.log(`${prixFioul.length} entrées extraites de fioulmarket.fr`);
+
+    if (prixFioul.length < 3) {
+      // Insérer au moins le prix du jour manuellement depuis le contenu HTML
+      // Chercher un prix type "1,413 €/L" ou "1.413 €/L" ou "1 413 € les 1 000"
+      const prixJourMatch = html.match(/(\d[\d\s]*[,.][\d]{3})\s*(?:€\/[Ll]|euros?\s*(?:le|\/)\s*litre)/i)
+        || html.match(/prix[^<]{0,50}?(\d[,.][\d]{3})/i);
+
+      if (prixJourMatch) {
+        let prixStr = prixJourMatch[1].replace(/\s/g, '').replace(',', '.');
+        let prix = parseFloat(prixStr);
+        if (!isNaN(prix) && prix > 0) {
+          if (prix > 10) prix = prix / 1000;
+          const today = new Date().toISOString().slice(0, 10);
+          prixFioul.push({ date: today, prix_litre: Math.round(prix * 10000) / 10000 });
+          console.log(`Prix du jour extrait : ${prix} €/L`);
+        }
+      }
+    }
 
     if (prixFioul.length === 0) {
-      // Le CSV GitHub est peut-être en retard — retourner le cache Supabase
-      const existing = await getExistingPrices();
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({ source: 'supabase_cache', data: existing, warning: 'Aucune donnée France fioul dans le CSV' })
-      };
+      throw new Error('Impossible d\'extraire des données de fioulmarket.fr');
     }
 
-    // Dédoublonner par date et trier
+    // Dédoublonner et trier
     const byDate = {};
     prixFioul.forEach(p => { byDate[p.date] = p; });
     const sorted = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
@@ -117,15 +128,13 @@ exports.handler = async (event, context) => {
     });
 
     if (!upsertRes.ok) {
-      console.error('Erreur Supabase upsert:', await upsertRes.text());
-    } else {
-      console.log(`${sorted.length} entrées sauvegardées dans Supabase`);
+      console.error('Erreur Supabase:', await upsertRes.text());
     }
 
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: JSON.stringify({ source: 'wob_csv_fresh', data: sorted, count: sorted.length })
+      body: JSON.stringify({ source: 'fioulmarket_fresh', data: sorted, count: sorted.length })
     };
 
   } catch (error) {
@@ -147,7 +156,7 @@ async function getExistingPrices() {
   const sixMoisAgo = new Date();
   sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
   const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/prix_fioul_dgec?date=gte.${sixMoisAgo.toISOString().slice(0,10)}&order=date.asc`,
+    `${SUPABASE_URL}/rest/v1/prix_fioul_dgec?date=gte.${sixMoisAgo.toISOString().slice(0, 10)}&order=date.asc`,
     { headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY } }
   );
   if (!r.ok) return [];
