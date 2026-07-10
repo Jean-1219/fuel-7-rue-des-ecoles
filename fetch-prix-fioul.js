@@ -1,7 +1,5 @@
 // Fonction Netlify : récupère les prix hebdomadaires du fioul DGEC
-// et les stocke dans Supabase.
-// Appelée via /.netlify/functions/fetch-prix-fioul (GET)
-// ou automatiquement chaque lundi via un cron job.
+// Source : fichier Excel officiel DGEC (URL stable, mis à jour chaque lundi)
 
 const fetch = require('node-fetch');
 const XLSX = require('xlsx');
@@ -16,11 +14,8 @@ const HEADERS_SB = {
   'Prefer': 'resolution=merge-duplicates'
 };
 
-// URL du fichier Excel DGEC — prix hebdomadaires depuis 1985
-const DGEC_URL = 'https://www.ecologie.gouv.fr/sites/default/files/2024_PrixProduitsPetroliers_Hebdomadaires.xlsx';
-
-// Fallback : URL alternative
-const DGEC_URL_ALT = 'https://www.statistiques.developpement-durable.gouv.fr/sites/default/files/2024_PrixProduitsPetroliers_Hebdomadaires.xlsx';
+// URL stable du fichier Excel DGEC — prix depuis janvier 2020, mis à jour chaque lundi
+const DGEC_URL = 'https://www.ecologie.gouv.fr/sites/default/files/documents/Prix%20HTT%20et%20TTC%20depuis%20janvier%202020_0.xlsx';
 
 exports.handler = async (event, context) => {
   const corsHeaders = {
@@ -30,70 +25,53 @@ exports.handler = async (event, context) => {
   };
 
   try {
-    console.log('Récupération du fichier DGEC...');
+    console.log('Téléchargement du fichier DGEC...');
 
-    // Tentative de téléchargement du fichier Excel DGEC
-    let buffer = null;
-    let fetchError = null;
+    const response = await fetch(DGEC_URL, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; FuelTracker/1.0)' },
+      timeout: 20000
+    });
 
-    for (const url of [DGEC_URL, DGEC_URL_ALT]) {
-      try {
-        const response = await fetch(url, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; FuelTracker/1.0)' },
-          timeout: 15000
-        });
-        if (response.ok) {
-          buffer = await response.buffer();
-          console.log(`Fichier téléchargé depuis ${url}`);
-          break;
-        }
-      } catch (e) {
-        fetchError = e;
-        console.warn(`Échec ${url}: ${e.message}`);
-      }
+    if (!response.ok) {
+      throw new Error(`Échec téléchargement DGEC : HTTP ${response.status}`);
     }
 
-    if (!buffer) {
-      // Si le fichier DGEC n'est pas accessible, on retourne les données Supabase existantes
-      console.warn('Fichier DGEC inaccessible, retour des données Supabase');
-      const existing = await getExistingPrices();
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({ source: 'supabase_cache', data: existing })
-      };
-    }
+    const buffer = await response.buffer();
+    console.log(`Fichier téléchargé : ${buffer.length} octets`);
 
-    // Parsing du fichier Excel
     const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    console.log('Feuilles disponibles :', workbook.SheetNames);
 
-    // Chercher la feuille contenant le fioul domestique
     let prixFioul = [];
 
     for (const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
 
-      // Chercher les colonnes date et fioul domestique
       let dateCol = -1, fioulCol = -1, headerRow = -1;
 
-      for (let i = 0; i < Math.min(rows.length, 20); i++) {
+      // Chercher la ligne d'en-tête
+      for (let i = 0; i < Math.min(rows.length, 30); i++) {
         const row = rows[i];
         if (!row) continue;
         for (let j = 0; j < row.length; j++) {
-          const cell = String(row[j] || '').toLowerCase();
-          if (cell.includes('date') || cell.includes('semaine')) dateCol = j;
-          if (cell.includes('fioul') || cell.includes('fuel') || cell.includes('fod')) fioulCol = j;
+          const cell = String(row[j] || '').toLowerCase().trim();
+          if (cell.includes('date') || cell.includes('semaine') || cell.includes('période')) dateCol = j;
+          if (cell.includes('fioul') || cell.includes('fod') || cell.includes('fuel') || cell.includes('combustible')) fioulCol = j;
         }
         if (dateCol >= 0 && fioulCol >= 0) { headerRow = i; break; }
       }
 
+      console.log(`Feuille "${sheetName}" : dateCol=${dateCol}, fioulCol=${fioulCol}, headerRow=${headerRow}`);
       if (headerRow < 0) continue;
 
-      // Extraire les données
+      // Filtrer sur les 6 derniers mois
+      const sixMoisAgo = new Date();
+      sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
+
       for (let i = headerRow + 1; i < rows.length; i++) {
         const row = rows[i];
-        if (!row || !row[dateCol] || !row[fioulCol]) continue;
+        if (!row || row[dateCol] === null || row[fioulCol] === null) continue;
 
         let dateVal = row[dateCol];
         let prix = parseFloat(row[fioulCol]);
@@ -104,47 +82,44 @@ exports.handler = async (event, context) => {
         if (dateVal instanceof Date) {
           dateStr = dateVal.toISOString().slice(0, 10);
         } else if (typeof dateVal === 'number') {
-          // Date Excel sérialisée
           const d = XLSX.SSF.parse_date_code(dateVal);
           if (d) dateStr = `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
         } else if (typeof dateVal === 'string') {
-          const match = dateVal.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
-          if (match) {
-            const y = match[3].length === 2 ? '20' + match[3] : match[3];
-            dateStr = `${y}-${String(match[2]).padStart(2,'0')}-${String(match[1]).padStart(2,'0')}`;
+          // Format JJ/MM/AAAA ou JJ-MM-AAAA
+          const m = dateVal.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+          if (m) {
+            const y = m[3].length === 2 ? '20' + m[3] : m[3];
+            dateStr = `${y}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
           }
         }
 
         if (!dateStr) continue;
-
-        // Le prix DGEC est en c€/L → convertir en €/L si > 10
-        if (prix > 10) prix = prix / 100;
-
-        // Garder uniquement les 6 derniers mois
-        const sixMoisAgo = new Date();
-        sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
         if (new Date(dateStr) < sixMoisAgo) continue;
 
-        prixFioul.push({ date: dateStr, prix_litre: Math.round(prix * 1000) / 1000 });
+        // Le prix DGEC fioul TTC est en c€/L → convertir en €/L
+        if (prix > 10) prix = prix / 100;
+
+        prixFioul.push({ date: dateStr, prix_litre: Math.round(prix * 10000) / 10000 });
       }
 
-      if (prixFioul.length > 0) break;
+      if (prixFioul.length > 0) {
+        console.log(`${prixFioul.length} entrées trouvées dans la feuille "${sheetName}"`);
+        break;
+      }
     }
 
-    // Si pas de données parsées depuis DGEC, retourner cache Supabase
     if (prixFioul.length === 0) {
+      console.warn('Aucune donnée parsée depuis le fichier DGEC, retour cache Supabase');
       const existing = await getExistingPrices();
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({ source: 'supabase_cache', data: existing })
-      };
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ source: 'supabase_cache', data: existing }) };
     }
 
-    // Trier par date
-    prixFioul.sort((a, b) => a.date.localeCompare(b.date));
+    // Dédoublonner par date (garder le dernier)
+    const byDate = {};
+    prixFioul.forEach(p => { byDate[p.date] = p; });
+    prixFioul = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
 
-    // Stocker dans Supabase (upsert)
+    // Upsert dans Supabase
     const upsertRes = await fetch(`${SUPABASE_URL}/rest/v1/prix_fioul_dgec`, {
       method: 'POST',
       headers: HEADERS_SB,
@@ -152,8 +127,9 @@ exports.handler = async (event, context) => {
     });
 
     if (!upsertRes.ok) {
-      const err = await upsertRes.text();
-      console.error('Erreur Supabase upsert:', err);
+      console.error('Erreur Supabase upsert:', await upsertRes.text());
+    } else {
+      console.log(`${prixFioul.length} entrées upsertées dans Supabase`);
     }
 
     return {
@@ -163,22 +139,12 @@ exports.handler = async (event, context) => {
     };
 
   } catch (error) {
-    console.error('Erreur générale:', error);
-
-    // En cas d'erreur, retourner les données existantes en Supabase
+    console.error('Erreur générale:', error.message);
     try {
       const existing = await getExistingPrices();
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({ source: 'supabase_cache', data: existing })
-      };
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ source: 'supabase_cache', data: existing, error: error.message }) };
     } catch (e2) {
-      return {
-        statusCode: 500,
-        headers: corsHeaders,
-        body: JSON.stringify({ error: error.message })
-      };
+      return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: error.message }) };
     }
   }
 };
@@ -186,12 +152,10 @@ exports.handler = async (event, context) => {
 async function getExistingPrices() {
   const sixMoisAgo = new Date();
   sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
-  const dateStr = sixMoisAgo.toISOString().slice(0, 10);
-
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/prix_fioul_dgec?date=gte.${dateStr}&order=date.asc`,
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/prix_fioul_dgec?date=gte.${sixMoisAgo.toISOString().slice(0,10)}&order=date.asc`,
     { headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY } }
   );
-  if (!res.ok) return [];
-  return res.json();
+  if (!r.ok) return [];
+  return r.json();
 }
