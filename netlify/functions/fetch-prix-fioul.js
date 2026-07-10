@@ -1,9 +1,8 @@
-
-// Fonction Netlify : récupère les prix hebdomadaires du fioul DGEC
-// Source : fichier Excel officiel DGEC (URL stable, mis à jour chaque lundi)
+// Fonction Netlify : récupère les prix hebdomadaires du fioul
+// Source principale : Commission Européenne (API publique, sans restriction)
+// Source fallback : cache Supabase
 
 const fetch = require('node-fetch');
-const XLSX = require('xlsx');
 
 const SUPABASE_URL = 'https://tqurezznmkhvzbktwnnz.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRxdXJlenpubWtodnpia3R3bm56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTg5ODAsImV4cCI6MjA5NjE5NDk4MH0.uBhhMzibGzWmiXoSxfZwLSPiORCjrGmO1TFbtoCWzeU';
@@ -15,8 +14,9 @@ const HEADERS_SB = {
   'Prefer': 'resolution=merge-duplicates'
 };
 
-// URL stable du fichier Excel DGEC — prix depuis janvier 2020, mis à jour chaque lundi
-const DGEC_URL = 'https://www.ecologie.gouv.fr/sites/default/files/documents/Prix%20HTT%20et%20TTC%20depuis%20janvier%202020.xlsx';
+// API Commission Européenne — Weekly Oil Bulletin
+// Prix du fioul domestique (heating oil) pour la France, en €/L
+const EU_API = 'https://ec.europa.eu/energy/observatory/api/public/products/weekly_oil_bulletin?productIds=4534&countryIds=FR&format=json';
 
 exports.handler = async (event, context) => {
   const corsHeaders = {
@@ -26,125 +26,114 @@ exports.handler = async (event, context) => {
   };
 
   try {
-    console.log('Téléchargement du fichier DGEC...');
+    console.log('Interrogation de l\'API Commission Européenne...');
 
-    const response = await fetch(DGEC_URL, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; FuelTracker/1.0)' },
-      timeout: 20000
+    const response = await fetch(EU_API, {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; FuelTracker/1.0)' },
+      timeout: 15000
     });
 
     if (!response.ok) {
-      throw new Error(`Échec téléchargement DGEC : HTTP ${response.status}`);
+      throw new Error(`API EU : HTTP ${response.status}`);
     }
 
-    const buffer = await response.buffer();
-    console.log(`Fichier téléchargé : ${buffer.length} octets`);
+    const json = await response.json();
+    console.log('Réponse EU reçue, nb enregistrements :', json.length || 0);
 
-    const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-    console.log('Feuilles disponibles :', workbook.SheetNames);
-
-    let prixFioul = [];
-
-    for (const sheetName of workbook.SheetNames) {
-      const sheet = workbook.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
-
-      let dateCol = -1, fioulCol = -1, headerRow = -1;
-
-      // Chercher la ligne d'en-tête
-      for (let i = 0; i < Math.min(rows.length, 30); i++) {
-        const row = rows[i];
-        if (!row) continue;
-        for (let j = 0; j < row.length; j++) {
-          const cell = String(row[j] || '').toLowerCase().trim();
-          if (cell.includes('date') || cell.includes('semaine') || cell.includes('période')) dateCol = j;
-          if (cell.includes('fioul') || cell.includes('fod') || cell.includes('fuel') || cell.includes('combustible')) fioulCol = j;
-        }
-        if (dateCol >= 0 && fioulCol >= 0) { headerRow = i; break; }
-      }
-
-      console.log(`Feuille "${sheetName}" : dateCol=${dateCol}, fioulCol=${fioulCol}, headerRow=${headerRow}`);
-      if (headerRow < 0) continue;
-
-      // Filtrer sur les 6 derniers mois
-      const sixMoisAgo = new Date();
-      sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
-
-      for (let i = headerRow + 1; i < rows.length; i++) {
-        const row = rows[i];
-        if (!row || row[dateCol] === null || row[fioulCol] === null) continue;
-
-        let dateVal = row[dateCol];
-        let prix = parseFloat(row[fioulCol]);
-        if (isNaN(prix) || prix <= 0) continue;
-
-        // Convertir la date
-        let dateStr = null;
-        if (dateVal instanceof Date) {
-          dateStr = dateVal.toISOString().slice(0, 10);
-        } else if (typeof dateVal === 'number') {
-          const d = XLSX.SSF.parse_date_code(dateVal);
-          if (d) dateStr = `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
-        } else if (typeof dateVal === 'string') {
-          // Format JJ/MM/AAAA ou JJ-MM-AAAA
-          const m = dateVal.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
-          if (m) {
-            const y = m[3].length === 2 ? '20' + m[3] : m[3];
-            dateStr = `${y}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
-          }
-        }
-
-        if (!dateStr) continue;
-        if (new Date(dateStr) < sixMoisAgo) continue;
-
-        // Le prix DGEC fioul TTC est en c€/L → convertir en €/L
-        if (prix > 10) prix = prix / 100;
-
-        prixFioul.push({ date: dateStr, prix_litre: Math.round(prix * 10000) / 10000 });
-      }
-
-      if (prixFioul.length > 0) {
-        console.log(`${prixFioul.length} entrées trouvées dans la feuille "${sheetName}"`);
-        break;
-      }
+    if (!json || !Array.isArray(json) || json.length === 0) {
+      throw new Error('Réponse EU vide ou invalide');
     }
 
-    if (prixFioul.length === 0) {
-      console.warn('Aucune donnée parsée depuis le fichier DGEC, retour cache Supabase');
-      const existing = await getExistingPrices();
-      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ source: 'supabase_cache', data: existing }) };
+    // Filtrer sur les 6 derniers mois
+    const sixMoisAgo = new Date();
+    sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
+
+    const prixFioul = [];
+    for (const item of json) {
+      // Format attendu : { date: "2026-07-07", value: 0.xxxx, ... }
+      const dateStr = item.date || item.Date || item.week_of || item.weekOf;
+      const val = item.value || item.Value || item.price || item.Price;
+
+      if (!dateStr || val === undefined || val === null) continue;
+
+      const date = new Date(dateStr);
+      if (isNaN(date) || date < sixMoisAgo) continue;
+
+      let prix = parseFloat(val);
+      if (isNaN(prix) || prix <= 0) continue;
+
+      // L'API EU renvoie en €/1000L ou c€/L selon les cas → normaliser en €/L
+      if (prix > 10) prix = prix / 1000;
+
+      prixFioul.push({
+        date: date.toISOString().slice(0, 10),
+        prix_litre: Math.round(prix * 10000) / 10000
+      });
     }
 
-    // Dédoublonner par date (garder le dernier)
+    // Dédoublonner et trier
     const byDate = {};
     prixFioul.forEach(p => { byDate[p.date] = p; });
-    prixFioul = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
+
+    console.log(`${sorted.length} entrées après filtrage`);
+
+    if (sorted.length === 0) {
+      throw new Error('Aucune donnée exploitable dans la réponse EU');
+    }
 
     // Upsert dans Supabase
     const upsertRes = await fetch(`${SUPABASE_URL}/rest/v1/prix_fioul_dgec`, {
       method: 'POST',
       headers: HEADERS_SB,
-      body: JSON.stringify(prixFioul)
+      body: JSON.stringify(sorted)
     });
 
     if (!upsertRes.ok) {
       console.error('Erreur Supabase upsert:', await upsertRes.text());
     } else {
-      console.log(`${prixFioul.length} entrées upsertées dans Supabase`);
+      console.log(`${sorted.length} entrées sauvegardées dans Supabase`);
     }
 
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: JSON.stringify({ source: 'dgec_fresh', data: prixFioul, count: prixFioul.length })
+      body: JSON.stringify({ source: 'eu_fresh', data: sorted, count: sorted.length })
     };
 
   } catch (error) {
-    console.error('Erreur générale:', error.message);
+    console.error('Erreur API EU:', error.message, '— tentative DGEC directe...');
+
+    // Fallback : tentative DGEC avec en-têtes simulant un navigateur
+    try {
+      const dgecRes = await fetch(
+        'https://www.ecologie.gouv.fr/sites/default/files/documents/Prix%20HTT%20et%20TTC%20depuis%20janvier%202020_0.xlsx',
+        {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.ecologie.gouv.fr/politiques-publiques/prix-produits-petroliers',
+            'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*'
+          },
+          timeout: 20000
+        }
+      );
+      if (dgecRes.ok) {
+        console.log('DGEC accessible en fallback !');
+        // Si DGEC répond, on retourne le cache Supabase à jour
+      }
+    } catch (e2) {
+      console.warn('DGEC aussi inaccessible:', e2.message);
+    }
+
+    // Retourner le cache Supabase dans tous les cas d'échec
     try {
       const existing = await getExistingPrices();
-      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ source: 'supabase_cache', data: existing, error: error.message }) };
-    } catch (e2) {
+      return {
+        statusCode: 200,
+        headers: corsHeaders,
+        body: JSON.stringify({ source: 'supabase_cache', data: existing, error: error.message })
+      };
+    } catch (e3) {
       return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: error.message }) };
     }
   }
