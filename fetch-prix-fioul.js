@@ -15,7 +15,7 @@ const HEADERS_SB = {
 };
 
 // URL stable du fichier Excel DGEC — prix depuis janvier 2020, mis à jour chaque lundi
-const DGEC_URL = 'https://www.ecologie.gouv.fr/sites/default/files/documents/Prix%20HTT%20et%20TTC%20depuis%20janvier%202020_0.xlsx';
+const DGEC_URL = 'https://www.ecologie.gouv.fr/sites/default/files/documents/Prix%20HTT%20et%20TTC%20depuis%20janvier%202020.xlsx';
 
 exports.handler = async (event, context) => {
   const corsHeaders = {
