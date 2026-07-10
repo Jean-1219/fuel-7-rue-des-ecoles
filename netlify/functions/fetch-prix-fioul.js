@@ -1,6 +1,6 @@
-// Fonction Netlify : récupère les prix hebdomadaires du fioul
-// Source principale : Commission Européenne (API publique, sans restriction)
-// Source fallback : cache Supabase
+// Fonction Netlify : récupère les prix hebdomadaires du fioul domestique pour la France
+// Source : CSV public GitHub (Weekly Oil Bulletin EU) — aucune restriction d'accès
+// Déclenché chaque lundi à 8h (cron) ou manuellement via le bouton Actualiser
 
 const fetch = require('node-fetch');
 
@@ -14,9 +14,8 @@ const HEADERS_SB = {
   'Prefer': 'resolution=merge-duplicates'
 };
 
-// API Commission Européenne — Weekly Oil Bulletin
-// Prix du fioul domestique (heating oil) pour la France, en €/L
-const EU_API = 'https://ec.europa.eu/energy/observatory/api/public/products/weekly_oil_bulletin?productIds=4534&countryIds=FR&format=json';
+// CSV public — Weekly Oil Bulletin EU, mis à jour automatiquement chaque semaine
+const CSV_URL = 'https://raw.githubusercontent.com/the-Hull/weekly_oil_bulletin/main/data/db/WOB.csv';
 
 exports.handler = async (event, context) => {
   const corsHeaders = {
@@ -26,61 +25,89 @@ exports.handler = async (event, context) => {
   };
 
   try {
-    console.log('Interrogation de l\'API Commission Européenne...');
+    console.log('Téléchargement du CSV Weekly Oil Bulletin...');
 
-    const response = await fetch(EU_API, {
-      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; FuelTracker/1.0)' },
-      timeout: 15000
-    });
+    const response = await fetch(CSV_URL, { timeout: 15000 });
+    if (!response.ok) throw new Error(`CSV inaccessible : HTTP ${response.status}`);
 
-    if (!response.ok) {
-      throw new Error(`API EU : HTTP ${response.status}`);
-    }
+    const text = await response.text();
+    const lines = text.split('\n').filter(l => l.trim());
+    if (lines.length < 2) throw new Error('CSV vide');
 
-    const json = await response.json();
-    console.log('Réponse EU reçue, nb enregistrements :', json.length || 0);
+    // Parser l'en-tête
+    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+    console.log('Colonnes CSV :', headers.join(', '));
 
-    if (!json || !Array.isArray(json) || json.length === 0) {
-      throw new Error('Réponse EU vide ou invalide');
-    }
+    // Trouver les colonnes utiles
+    // Format attendu : date, Geo, Product Name, tax, values
+    const idxDate    = headers.findIndex(h => h.toLowerCase().includes('date'));
+    const idxGeo     = headers.findIndex(h => h.toLowerCase().includes('geo') || h.toLowerCase().includes('country'));
+    const idxProduct = headers.findIndex(h => h.toLowerCase().includes('product'));
+    const idxTax     = headers.findIndex(h => h.toLowerCase().includes('tax'));
+    const idxValue   = headers.findIndex(h => h.toLowerCase().includes('value') || h.toLowerCase() === 'values');
 
-    // Filtrer sur les 6 derniers mois
+    console.log(`Colonnes : date=${idxDate} geo=${idxGeo} product=${idxProduct} tax=${idxTax} value=${idxValue}`);
+
+    if (idxDate < 0 || idxValue < 0) throw new Error('Colonnes date/value introuvables dans le CSV');
+
     const sixMoisAgo = new Date();
     sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
 
     const prixFioul = [];
-    for (const item of json) {
-      // Format attendu : { date: "2026-07-07", value: 0.xxxx, ... }
-      const dateStr = item.date || item.Date || item.week_of || item.weekOf;
-      const val = item.value || item.Value || item.price || item.Price;
 
-      if (!dateStr || val === undefined || val === null) continue;
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+      if (cols.length < Math.max(idxDate, idxValue) + 1) continue;
+
+      // Filtrer : France + Heating gas oil/FOD + avec taxes (TTC)
+      if (idxGeo >= 0) {
+        const geo = (cols[idxGeo] || '').toLowerCase();
+        if (!geo.includes('france') && !geo.includes('fr')) continue;
+      }
+      if (idxProduct >= 0) {
+        const prod = (cols[idxProduct] || '').toLowerCase();
+        if (!prod.includes('heat') && !prod.includes('fioul') && !prod.includes('fod') && !prod.includes('gas oil')) continue;
+      }
+      if (idxTax >= 0) {
+        const tax = (cols[idxTax] || '').toLowerCase();
+        // Garder seulement les prix TTC (with taxes)
+        if (tax.includes('without') || tax.includes('hors') || tax.includes('ht')) continue;
+      }
+
+      const dateStr = cols[idxDate];
+      if (!dateStr || !/\d{4}/.test(dateStr)) continue;
 
       const date = new Date(dateStr);
       if (isNaN(date) || date < sixMoisAgo) continue;
 
-      let prix = parseFloat(val);
-      if (isNaN(prix) || prix <= 0) continue;
+      let val = parseFloat(cols[idxValue]);
+      if (isNaN(val) || val <= 0) continue;
 
-      // L'API EU renvoie en €/1000L ou c€/L selon les cas → normaliser en €/L
-      if (prix > 10) prix = prix / 1000;
+      // Les valeurs EU sont en €/1000L → convertir en €/L
+      if (val > 10) val = val / 1000;
 
       prixFioul.push({
         date: date.toISOString().slice(0, 10),
-        prix_litre: Math.round(prix * 10000) / 10000
+        prix_litre: Math.round(val * 10000) / 10000
       });
     }
 
-    // Dédoublonner et trier
+    console.log(`${prixFioul.length} entrées France fioul trouvées`);
+
+    if (prixFioul.length === 0) {
+      // Le CSV GitHub est peut-être en retard — retourner le cache Supabase
+      const existing = await getExistingPrices();
+      return {
+        statusCode: 200,
+        headers: corsHeaders,
+        body: JSON.stringify({ source: 'supabase_cache', data: existing, warning: 'Aucune donnée France fioul dans le CSV' })
+      };
+    }
+
+    // Dédoublonner par date et trier
     const byDate = {};
     prixFioul.forEach(p => { byDate[p.date] = p; });
     const sorted = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
-
-    console.log(`${sorted.length} entrées après filtrage`);
-
-    if (sorted.length === 0) {
-      throw new Error('Aucune donnée exploitable dans la réponse EU');
-    }
 
     // Upsert dans Supabase
     const upsertRes = await fetch(`${SUPABASE_URL}/rest/v1/prix_fioul_dgec`, {
@@ -98,34 +125,11 @@ exports.handler = async (event, context) => {
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: JSON.stringify({ source: 'eu_fresh', data: sorted, count: sorted.length })
+      body: JSON.stringify({ source: 'wob_csv_fresh', data: sorted, count: sorted.length })
     };
 
   } catch (error) {
-    console.error('Erreur API EU:', error.message, '— tentative DGEC directe...');
-
-    // Fallback : tentative DGEC avec en-têtes simulant un navigateur
-    try {
-      const dgecRes = await fetch(
-        'https://www.ecologie.gouv.fr/sites/default/files/documents/Prix%20HTT%20et%20TTC%20depuis%20janvier%202020_0.xlsx',
-        {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.ecologie.gouv.fr/politiques-publiques/prix-produits-petroliers',
-            'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*'
-          },
-          timeout: 20000
-        }
-      );
-      if (dgecRes.ok) {
-        console.log('DGEC accessible en fallback !');
-        // Si DGEC répond, on retourne le cache Supabase à jour
-      }
-    } catch (e2) {
-      console.warn('DGEC aussi inaccessible:', e2.message);
-    }
-
-    // Retourner le cache Supabase dans tous les cas d'échec
+    console.error('Erreur:', error.message);
     try {
       const existing = await getExistingPrices();
       return {
@@ -133,7 +137,7 @@ exports.handler = async (event, context) => {
         headers: corsHeaders,
         body: JSON.stringify({ source: 'supabase_cache', data: existing, error: error.message })
       };
-    } catch (e3) {
+    } catch (e2) {
       return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: error.message }) };
     }
   }
