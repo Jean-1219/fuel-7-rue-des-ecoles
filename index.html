@@ -415,7 +415,7 @@ async function loadPrixFioul(forceRefresh = false) {
 
     if (forceRefresh || estVieux) {
       try {
-        const r = await fetch('/.netlify/functions/fetch-prix-fioul');
+        const r = await fetch('https://tqurezznmkhvzbktwnnz.supabase.co/functions/v1/fetch-prix-fioul');
         if (r.ok) {
           const result = await r.json();
           if (result.data && result.data.length > 0) {
