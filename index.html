@@ -119,7 +119,7 @@
   <div class="header">
     <span style="font-size:22px">🔥</span>
     <h1>Fuel — 7 rue des Écoles</h1>
-    <small>21 cm = 500 L &nbsp;|&nbsp; 30 cm = 800 L</small>
+    <small>Cuve cylindrique couchée &nbsp;|&nbsp; 24 cm ≈ 308 L</small>
   </div>
 
   <!-- Navigation principale -->
@@ -150,7 +150,7 @@
       <div class="seuil-row">
         <label for="seuil-input">Déclencher l'alerte en dessous de</label>
         <input type="number" id="seuil-input" min="0" max="100" step="0.5" value="15">
-        <span>cm &nbsp;(≈ <span id="seuil-l-equiv">357</span> L)</span>
+        <span>cm &nbsp;(≈ <span id="seuil-l-equiv">—</span> L)</span>
         <button class="btn" onclick="saveSeuil()" style="margin-left:auto">✓ Appliquer</button>
       </div>
     </div>
@@ -231,7 +231,7 @@
       </div>
     </div>
 
-    <div class="conv-ref">Conversion : 21 cm = 500 L — 30 cm = 800 L (interpolation linéaire)</div>
+    <div class="conv-ref">Conversion : cuve cylindrique couchée Ø 1,51 m × 1,68 m (≈ 3 000 L), calée sur les livraisons du 31/07/2023, 20/03/2026 et 18/10/2026</div>
     <div class="sync-info" id="sync-label">Chargement…</div>
   </div>
 
@@ -347,8 +347,21 @@ function showPage(name) {
 }
 
 // ── Utilitaires ─────────────────────────────────────────────
-function cmToL(cm) { if (cm===null||isNaN(cm)) return null; return Math.round(500+(cm-21)*(300/9)); }
-function lToCm(l) { return ((l-500)*(9/300)+21).toFixed(1); }
+// Cuve enterrée = cylindre couché. Dimensions estimées à partir des livraisons
+// (31/07/2023 : 650 L, 20/03/2026 : 200 L, 18/10/2026 : 125 L).
+// À affiner : CUVE_DIAM_M = profondeur totale mesurée à la règle (fond de cuve), en mètres.
+const CUVE_DIAM_M = 1.51, CUVE_LONG_M = 1.68;
+function cmToL(cm) {
+  if (cm===null||isNaN(cm)) return null;
+  const R = CUVE_DIAM_M/2, h = Math.max(0, Math.min(cm/100, CUVE_DIAM_M));
+  const aire = R*R*Math.acos((R-h)/R) - (R-h)*Math.sqrt(Math.max(0, 2*R*h - h*h));
+  return Math.round(aire * CUVE_LONG_M * 1000);
+}
+function lToCm(l) {
+  let lo = 0, hi = CUVE_DIAM_M*100;
+  for (let i=0;i<40;i++) { const m=(lo+hi)/2; if (cmToL(m) < l) lo=m; else hi=m; }
+  return ((lo+hi)/2).toFixed(1);
+}
 function fmt(d) { return new Date(d+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'}); }
 function fmtLong(d) { return new Date(d+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'long',year:'numeric'}); }
 function fmtPrix(v) { return v !== null ? v.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:3}) : '—'; }
