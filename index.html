@@ -182,6 +182,30 @@
       </div>
     </div>
 
+    <!-- Chaudière : saisons de chauffe -->
+    <div class="section">
+      <div class="section-title">🔥 Chaudière — mise en route et arrêt</div>
+      <div class="form-grid">
+        <div class="fg"><label>Mise en route</label><input type="date" id="f-chauffe-debut"></div>
+        <div class="fg"><label>Arrêt (laisser vide si elle tourne)</label><input type="date" id="f-chauffe-fin"></div>
+      </div>
+      <div class="btn-row" style="margin-bottom:12px">
+        <button class="btn btn-primary" onclick="addSaison()">✓ Enregistrer</button>
+        <span style="font-size:12px;color:var(--text2);align-self:center">Arrêt seul = clôture la saison en cours</span>
+      </div>
+      <div id="chauffe-etat" style="font-size:13px;margin-bottom:8px"></div>
+      <div class="tw">
+        <table>
+          <thead><tr>
+            <th style="width:80px">Hiver</th><th style="width:90px">Mise en route</th>
+            <th style="width:90px">Arrêt</th><th style="width:70px">Durée</th><th style="width:28px"></th>
+          </tr></thead>
+          <tbody id="tbody-chauffe"></tbody>
+        </table>
+        <div class="empty" id="empty-chauffe">Aucune saison saisie.</div>
+      </div>
+    </div>
+
     <!-- Graphique niveau -->
     <div class="section">
       <div class="section-title">📈 Évolution du niveau</div>
@@ -324,13 +348,18 @@ async function sbInsert(table, data) {
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
+async function sbUpdate(table, id, data) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, { method: 'PATCH', headers: HEADERS_SB, body: JSON.stringify(data) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
 async function sbDelete(table, id) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, { method: 'DELETE', headers: HEADERS_SB });
   if (!r.ok) throw new Error(await r.text());
 }
 
 // ── État ────────────────────────────────────────────────────
-let releves = [], livraisons = [], prixFioulData = [];
+let releves = [], livraisons = [], prixFioulData = [], saisons = [];
 let seuilCm = 15, currentTab = 'niveau';
 let chartNiveau = null, chartAnnuel = null, chartCours = null;
 const SEUIL_KEY = 'fuel_seuil_cm';
@@ -405,6 +434,56 @@ async function loadData() {
     document.getElementById('table-zone').style.display = '';
     render();
   } catch(e) { setSyncLabel('Erreur : '+e.message); document.getElementById('loading-msg').textContent='Erreur de chargement.'; }
+  loadSaisons();
+}
+
+// ── Saisons de chauffe (mise en route / arrêt de la chaudière) ──
+async function loadSaisons() {
+  try { saisons = await sbGet('saisons_chauffe','?order=debut.asc,id.asc'); renderSaisons(); }
+  catch(e) { document.getElementById('chauffe-etat').textContent = '⚠️ Table « saisons_chauffe » introuvable dans Supabase.'; }
+}
+function nbJours(a, b) { return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00')) / 86400000); }
+function renderSaisons() {
+  const tbody = document.getElementById('tbody-chauffe'); tbody.innerHTML = '';
+  document.getElementById('empty-chauffe').style.display = saisons.length ? 'none' : '';
+  const today = new Date().toISOString().slice(0,10);
+  [...saisons].reverse().forEach(s => {
+    const y = parseInt(s.debut.slice(0,4)), m = parseInt(s.debut.slice(5,7));
+    const hiver = m >= 7 ? `${y}-${String(y+1).slice(2)}` : `${y-1}-${String(y).slice(2)}`;
+    const duree = s.fin ? nbJours(s.debut, s.fin)+' j' : `<span class="badge b-amber">en cours</span>`;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${hiver}</td><td>${fmt(s.debut)}</td><td>${s.fin ? fmt(s.fin) : '—'}</td><td>${duree}</td><td><button class="btn-del" onclick="deleteSaison(${s.id})">🗑</button></td>`;
+    tbody.appendChild(tr);
+  });
+  const enCours = saisons.find(s => !s.fin);
+  document.getElementById('chauffe-etat').innerHTML = enCours
+    ? `🟢 Chaudière en marche depuis le ${fmtLong(enCours.debut)} (${nbJours(enCours.debut, today)} jours)`
+    : (saisons.length ? `⚪ Chaudière arrêtée depuis le ${fmtLong(saisons[saisons.length-1].fin)}` : '');
+}
+async function addSaison() {
+  const debut = document.getElementById('f-chauffe-debut').value, fin = document.getElementById('f-chauffe-fin').value || null;
+  if (!debut && !fin) { alert('Saisis une date de mise en route et/ou d\'arrêt.'); return; }
+  if (debut && fin && fin < debut) { alert('L\'arrêt doit être après la mise en route.'); return; }
+  try {
+    setSyncLabel('Enregistrement…');
+    if (debut) {
+      if (saisons.some(s => !s.fin)) { alert('Une saison est déjà en cours : saisis d\'abord sa date d\'arrêt.'); setSyncLabel('Synchronisé ✓'); return; }
+      const res = await sbInsert('saisons_chauffe', { debut, fin }); saisons.push(res[0]);
+    } else {
+      const enCours = saisons.find(s => !s.fin);
+      if (!enCours) { alert('Aucune saison en cours à arrêter.'); setSyncLabel('Synchronisé ✓'); return; }
+      if (fin < enCours.debut) { alert('L\'arrêt doit être après la mise en route ('+fmt(enCours.debut)+').'); setSyncLabel('Synchronisé ✓'); return; }
+      const res = await sbUpdate('saisons_chauffe', enCours.id, { fin }); Object.assign(enCours, res[0]);
+    }
+    saisons.sort((a,b) => a.debut.localeCompare(b.debut) || a.id-b.id);
+    document.getElementById('f-chauffe-debut').value = ''; document.getElementById('f-chauffe-fin').value = '';
+    setSyncLabel('Synchronisé ✓'); renderSaisons();
+  } catch(e) { setSyncLabel('Erreur : '+e.message); }
+}
+async function deleteSaison(id) {
+  if (!confirm('Supprimer cette saison ?')) return;
+  try { await sbDelete('saisons_chauffe', id); saisons = saisons.filter(s => s.id !== id); renderSaisons(); }
+  catch(e) { setSyncLabel('Erreur : '+e.message); }
 }
 function setSyncLabel(t) { document.getElementById('sync-label').textContent = t; }
 
