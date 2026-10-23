@@ -119,7 +119,7 @@
   <div class="header">
     <span style="font-size:22px">🔥</span>
     <h1>Fuel — 7 rue des Écoles</h1>
-    <small>Cuve cylindrique couchée &nbsp;|&nbsp; 24 cm ≈ 308 L</small>
+    <small>Cuve cylindrique couchée ≈ 2 430 L &nbsp;|&nbsp; 24 cm ≈ 314 L</small>
   </div>
 
   <!-- Navigation principale -->
@@ -255,7 +255,7 @@
       </div>
     </div>
 
-    <div class="conv-ref">Conversion : cuve cylindrique couchée Ø 1,51 m × 1,68 m (≈ 3 000 L), calée sur les livraisons du 31/07/2023, 20/03/2026 et 18/10/2026</div>
+    <div class="conv-ref">Conversion : cuve cylindrique couchée Ø 1,285 m (mesuré) × 1,87 m (≈ 2 430 L), longueur calée sur les livraisons du 31/07/2023, 20/03/2026 et 18/10/2026</div>
     <div class="sync-info" id="sync-label">Chargement…</div>
   </div>
 
@@ -378,8 +378,8 @@ function showPage(name) {
 // ── Utilitaires ─────────────────────────────────────────────
 // Cuve enterrée = cylindre couché. Dimensions estimées à partir des livraisons
 // (31/07/2023 : 650 L, 20/03/2026 : 200 L, 18/10/2026 : 125 L).
-// À affiner : CUVE_DIAM_M = profondeur totale mesurée à la règle (fond de cuve), en mètres.
-const CUVE_DIAM_M = 1.51, CUVE_LONG_M = 1.68;
+// Diamètre mesuré à la règle le 23/10/2026 (128-129 cm) ; longueur calée sur les livraisons.
+const CUVE_DIAM_M = 1.285, CUVE_LONG_M = 1.874;
 function cmToL(cm) {
   if (cm===null||isNaN(cm)) return null;
   const R = CUVE_DIAM_M/2, h = Math.max(0, Math.min(cm/100, CUVE_DIAM_M));
