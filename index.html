@@ -623,6 +623,16 @@ function buildMerged() {
   return all.sort((a,b) => a.date.localeCompare(b.date) || a.id-b.id);
 }
 
+// Livraisons à compter entre deux relevés p → c.
+// Une livraison faite le jour de c n'est comptée que si c est le dernier relevé de ce jour-là :
+// avec un couple « avant / après livraison » le même jour, elle appartient au relevé « après ».
+function livEntre(p, c, sorted) {
+  const cDernierDuJour = !sorted.some(e => e.type==='niveau' && e.date===c.date && sorted.indexOf(e) > sorted.indexOf(c));
+  let liv = 0;
+  sorted.forEach(e => { if (e.type==='livraison' && e.date>p.date && (e.date<c.date || (e.date===c.date && cDernierDuJour))) liv += e.qty; });
+  return liv;
+}
+
 function computeConso(entry, sorted) {
   if (entry.type !== 'niveau') return null;
   const idx = sorted.indexOf(entry); let prev = null;
@@ -630,7 +640,7 @@ function computeConso(entry, sorted) {
   if (!prev) return null;
   const days = (new Date(entry.date)-new Date(prev.date))/86400000;
   if (days<=0) return null;
-  let liv=0; sorted.forEach(e=>{if(e.type==='livraison'&&e.date>prev.date&&e.date<=entry.date)liv+=e.qty;});
+  const liv=livEntre(prev, entry, sorted);
   const c=(cmToL(prev.cm)+liv-cmToL(entry.cm))/days;
   return c<0?null:c;
 }
@@ -640,7 +650,7 @@ function computeGlobalConso(merged) {
   let tc=0,td=0;
   for(let i=1;i<niveaux.length;i++){
     const p=niveaux[i-1],c=niveaux[i],days=(new Date(c.date)-new Date(p.date))/86400000;
-    let liv=0; livs.forEach(e=>{if(e.date>p.date&&e.date<=c.date)liv+=e.qty;});
+    const liv=livEntre(p, c, merged);
     const conso=cmToL(p.cm)+liv-cmToL(c.cm);
     if(conso>=0&&days>0){tc+=conso;td+=days;}
   }
@@ -724,11 +734,17 @@ function updateChartAnnuel(merged) {
   const byYear={};
   for(let i=1;i<niveaux.length;i++){
     const p=niveaux[i-1],c=niveaux[i],days=(new Date(c.date)-new Date(p.date))/86400000; if(days<=0)continue;
-    let liv=0; livs.forEach(e=>{if(e.date>p.date&&e.date<=c.date)liv+=e.qty;});
+    const liv=livEntre(p, c, merged);
     const conso=cmToL(p.cm)+liv-cmToL(c.cm); if(conso<0)continue;
-    const yr=c.date.slice(0,4);
-    if(!byYear[yr])byYear[yr]={conso:0,days:0,livré:0,cout:0};
-    byYear[yr].conso+=conso; byYear[yr].days+=days;
+    // Répartit la conso de l'intervalle sur chaque année, au prorata des jours
+    let d0=new Date(p.date), d1=new Date(c.date);
+    while(d0<d1){
+      const yr=String(d0.getFullYear()), finAnnee=new Date((d0.getFullYear()+1)+'-01-01');
+      const fin=finAnnee<d1?finAnnee:d1, part=(fin-d0)/86400000;
+      if(!byYear[yr])byYear[yr]={conso:0,days:0,livré:0,cout:0};
+      byYear[yr].conso+=conso*part/days; byYear[yr].days+=part;
+      d0=fin;
+    }
   }
   livs.forEach(e=>{
     const yr=e.date.slice(0,4); if(!byYear[yr])byYear[yr]={conso:0,days:0,livré:0,cout:0};
