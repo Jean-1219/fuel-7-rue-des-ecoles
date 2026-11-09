@@ -1,11 +1,16 @@
-// Récupère les prix du fioul depuis fioulmarket.fr et les enregistre dans Supabase.
-// Partagé par la fonction planifiée (chaque lundi) et la fonction appelée par le bouton « Actualiser ».
+// Récupère le prix moyen national du fioul domestique et l'enregistre dans Supabase.
+// Partagé par la fonction planifiée (chaque lundi) et la fonction du bouton « Actualiser ».
+//
+// Source : Weekly Oil Bulletin de la Commission européenne, fichier « Price developments
+// 2005 onwards ». Ce sont les prix que la France (DGEC) transmet chaque semaine à l'UE :
+// prix TTC du fioul domestique, en €/1000 L, relevés le lundi.
+// (fioulmarket.fr, l'ancienne source, renvoie une page sans tableau aux serveurs.)
 
 const fetch = require('node-fetch');
+const XLSX = require('xlsx');
 
 const SUPABASE_URL = 'https://tqurezznmkhvzbktwnnz.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRxdXJlenpubWtodnpia3R3bm56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTg5ODAsImV4cCI6MjA5NjE5NDk4MH0.uBhhMzibGzWmiXoSxfZwLSPiORCjrGmO1TFbtoCWzeU';
-
 const HEADERS_SB = {
   'apikey': SUPABASE_KEY,
   'Authorization': 'Bearer ' + SUPABASE_KEY,
@@ -13,146 +18,86 @@ const HEADERS_SB = {
   'Prefer': 'resolution=merge-duplicates'
 };
 
-// Correspondance jours FR → numéro
-const JOURS = { lundi:1, mardi:2, mercredi:3, jeudi:4, vendredi:5, samedi:6, dimanche:0 };
-const MOIS = { janvier:0, février:1, mars:2, avril:3, mai:4, juin:5, juillet:6, août:7, septembre:8, octobre:9, novembre:10, décembre:11 };
+const PAGE_WOB = 'https://energy.ec.europa.eu/data-and-analysis/weekly-oil-bulletin_en';
+const FICHIER_WOB = 'https://energy.ec.europa.eu/document/download/906e60ca-8b6a-44e7-8589-652854d2fd3f_en?filename=Weekly_Oil_Bulletin_Prices_History_maticni_4web.xlsx';
+const FEUILLE = 'Prices with taxes';
+const COLONNE = 'FR_price_with_tax_heating_oil';
+const MOIS_GARDES = 12;
 
-function parseDateFR(str) {
-  // Format : "Lundi 13 juillet 2026"
-  // \p{L} accepte les lettres accentuées (février, août, décembre), contrairement à \w
-  const m = str.toLowerCase().match(/([\p{L}]+)\s+(\d{1,2})(?:er)?\s+([\p{L}]+)\s+(\d{4})/u);
-  if (!m) return null;
-  const moisNum = MOIS[m[3]];
-  if (moisNum === undefined) return null;
-  const d = new Date(Date.UTC(parseInt(m[4]), moisNum, parseInt(m[2])));
-  return isNaN(d) ? null : d.toISOString().slice(0, 10);
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Content-Type': 'application/json'
+};
+
+// L'adresse du fichier est stable ; si elle change un jour, on la retrouve sur la page du bulletin.
+async function telechargerFichier() {
+  let r = await fetch(FICHIER_WOB, { timeout: 20000 });
+  if (r.ok) return r.buffer();
+  const page = await (await fetch(PAGE_WOB, { timeout: 10000 })).text();
+  const m = page.match(/href="([^"]*maticni[^"]*\.xlsx[^"]*)"/i);
+  if (!m) throw new Error(`fichier du Weekly Oil Bulletin introuvable (HTTP ${r.status})`);
+  const url = new URL(m[1].replace(/&amp;/g, '&'), PAGE_WOB).href;
+  r = await fetch(url, { timeout: 20000 });
+  if (!r.ok) throw new Error(`téléchargement du Weekly Oil Bulletin refusé (HTTP ${r.status})`);
+  return r.buffer();
+}
+
+function lirePrix(buffer) {
+  const wb = XLSX.read(buffer, { type: 'buffer', sheets: [FEUILLE] });
+  const ws = wb.Sheets[FEUILLE];
+  if (!ws) throw new Error(`feuille « ${FEUILLE} » absente du fichier`);
+  const lignes = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+  const col = lignes[0] ? lignes[0].indexOf(COLONNE) : -1;
+  if (col < 0) throw new Error(`colonne ${COLONNE} absente du fichier`);
+
+  const limite = new Date();
+  limite.setMonth(limite.getMonth() - MOIS_GARDES);
+  const prix = [];
+  for (const l of lignes) {
+    const serie = l[0], val = l[col];
+    if (typeof serie !== 'number' || typeof val !== 'number' || val <= 0) continue;
+    const d = new Date(Math.round((serie - 25569) * 86400000)); // date Excel → date JS
+    if (d < limite) continue;
+    prix.push({ date: d.toISOString().slice(0, 10), prix_litre: Math.round(val / 1000 * 10000) / 10000 });
+  }
+  return prix.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+async function enregistrer(prix) {
+  // on_conflict=date : sans ce paramètre, une date déjà présente provoque une erreur 409
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/prix_fioul_dgec?on_conflict=date`, {
+    method: 'POST', headers: HEADERS_SB, body: JSON.stringify(prix)
+  });
+  if (!r.ok) throw new Error(`enregistrement Supabase refusé (HTTP ${r.status}) : ${(await r.text()).slice(0, 200)}`);
+
+  // Retire de la période couverte les anciens prix d'une autre source (relevés quotidiens
+  // fioulmarket), pour que la courbe ne mélange pas deux séries différentes.
+  const dates = prix.map(p => p.date);
+  const filtre = `date=gte.${dates[0]}&date=not.in.(${dates.join(',')})`;
+  const d = await fetch(`${SUPABASE_URL}/rest/v1/prix_fioul_dgec?${filtre}`, { method: 'DELETE', headers: HEADERS_SB });
+  if (!d.ok) console.warn('Nettoyage des anciens prix impossible :', d.status);
 }
 
 async function majPrixFioul() {
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json'
-  };
-
   try {
-    console.log('Scraping fioulmarket.fr/evolution-prix-fioul...');
-
-    const response = await fetch('https://www.fioulmarket.fr/evolution-prix-fioul', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'fr-FR,fr;q=0.9'
-      },
-      timeout: 15000
-    });
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const html = await response.text();
-
-    const prixFioul = [];
-    const sixMoisAgo = new Date();
-    sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
-
-    // Parser le tableau HTML : <td>Lundi 13 juillet 2026</td><td>1502€</td>
-    const trMatches = html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi);
-    for (const trMatch of trMatches) {
-      const tds = [...trMatch[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)]
-        .map(m => m[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim());
-      if (tds.length < 2) continue;
-
-      const dateStr = parseDateFR(tds[0]);
-      if (!dateStr) continue;
-
-      const date = new Date(dateStr);
-      if (isNaN(date) || date < sixMoisAgo) continue;
-
-      // Prix format "1502€" ou "1 502€" ou "1502 €"
-      const prixRaw = tds[1].replace(/\s/g, '').replace('€', '').replace(',', '.');
-      let prix = parseFloat(prixRaw);
-      if (isNaN(prix) || prix <= 0) continue;
-
-      // Convertir €/1000L → €/L
-      if (prix > 10) prix = prix / 1000;
-
-      prixFioul.push({ date: dateStr, prix_litre: Math.round(prix * 10000) / 10000 });
-    }
-
-    console.log(`${prixFioul.length} entrées extraites du tableau HTML`);
-
-    // Fallback : chercher aussi le prix affiché en gros "1502€/1000L"
-    if (prixFioul.length === 0) {
-      const bigPrixMatch = html.match(/(\d[\d\s]+)€\/1000L/);
-      if (bigPrixMatch) {
-        let prix = parseFloat(bigPrixMatch[1].replace(/\s/g, '')) / 1000;
-        const today = new Date().toISOString().slice(0, 10);
-        prixFioul.push({ date: today, prix_litre: Math.round(prix * 10000) / 10000 });
-        console.log(`Prix du jour extrait en fallback : ${prix} €/L`);
-      }
-    }
-
-    if (prixFioul.length === 0) {
-      throw new Error('Aucune donnée extraite de fioulmarket.fr');
-    }
-
-    // Dédoublonner par date (garder le lundi = prix de référence hebdo)
-    // Priorité aux lundis, sinon garder le plus récent
-    const byDate = {};
-    prixFioul.forEach(p => {
-      const d = new Date(p.date);
-      const isLundi = d.getDay() === 1;
-      if (!byDate[p.date] || isLundi) byDate[p.date] = p;
-    });
-    const sorted = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
-
-    console.log(`${sorted.length} entrées après dédoublonnage`);
-
-    // Upsert dans Supabase
-    // on_conflict=date : sans ce paramètre, une date déjà présente provoque une erreur 409 et rien n'est enregistré
-    const upsertRes = await fetch(`${SUPABASE_URL}/rest/v1/prix_fioul_dgec?on_conflict=date`, {
-      method: 'POST',
-      headers: HEADERS_SB,
-      body: JSON.stringify(sorted)
-    });
-
-    if (!upsertRes.ok) {
-      const txt = await upsertRes.text();
-      console.error('Erreur Supabase:', txt);
-      throw new Error(`Enregistrement Supabase refusé (HTTP ${upsertRes.status}) : ${txt.slice(0, 200)}`);
-    } else {
-      console.log(`${sorted.length} entrées upsertées dans Supabase`);
-    }
-
+    const prix = lirePrix(await telechargerFichier());
+    if (!prix.length) throw new Error('aucun prix France trouvé dans le Weekly Oil Bulletin');
+    await enregistrer(prix);
+    console.log(`${prix.length} prix enregistrés, dernier : ${prix[prix.length - 1].date}`);
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: JSON.stringify({ source: 'fioulmarket_html', data: sorted, count: sorted.length })
+      body: JSON.stringify({ source: 'weekly_oil_bulletin', data: prix, count: prix.length })
     };
-
   } catch (error) {
     console.error('Erreur:', error.message);
-    try {
-      const existing = await getExistingPrices();
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({ source: 'supabase_cache', data: existing, error: error.message })
-      };
-    } catch (e2) {
-      return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: error.message }) };
-    }
+    return {
+      statusCode: 200,
+      headers: corsHeaders,
+      body: JSON.stringify({ source: 'supabase_cache', data: [], error: error.message })
+    };
   }
 }
 
 module.exports = { majPrixFioul };
-
-async function getExistingPrices() {
-  const sixMoisAgo = new Date();
-  sixMoisAgo.setMonth(sixMoisAgo.getMonth() - 6);
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/prix_fioul_dgec?date=gte.${sixMoisAgo.toISOString().slice(0, 10)}&order=date.asc`,
-    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY } }
-  );
-  if (!r.ok) return [];
-  return r.json();
-}
