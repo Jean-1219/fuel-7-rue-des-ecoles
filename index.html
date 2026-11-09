@@ -213,6 +213,7 @@
         <div class="legend-item"><div class="legend-dot" style="background:#185FA5"></div>Niveau (L)</div>
         <div class="legend-item"><div class="legend-dot" style="background:#EF9F27"></div>Livraison</div>
         <div class="legend-item"><div class="legend-dot" style="background:#E24B4A"></div>Seuil alerte</div>
+        <div class="legend-item"><div class="legend-dot" style="border:1.5px dashed #185FA5;width:10px;height:10px;border-radius:2px"></div>Estimé (pas de relevé)</div>
       </div>
       <div class="chart-wrap" style="height:220px"><canvas id="chartNiveau"></canvas></div>
     </div>
@@ -703,12 +704,24 @@ function buildMerged() {
 }
 
 // Livraisons à compter entre deux relevés p → c.
-// Une livraison faite le jour de c n'est comptée que si c est le dernier relevé de ce jour-là :
-// avec un couple « avant / après livraison » le même jour, elle appartient au relevé « après ».
+// Une livraison faite le jour d'un relevé appartient au relevé « après » :
+// - avec un couple « avant / après » le même jour, au second relevé du jour ;
+// - avec un seul relevé ce jour-là, à ce relevé, sauf si sa note contient « avant ».
+function estAvant(e) { return /avant/i.test(e.note || ''); }
+function dernierDuJour(r, sorted) {
+  return !sorted.some(e => e.type==='niveau' && e.date===r.date && sorted.indexOf(e) > sorted.indexOf(r));
+}
+function livDans(e, p, c, sorted) {
+  if (e.type !== 'livraison') return false;
+  const pAvant = estAvant(p) && dernierDuJour(p, sorted);
+  const cApres = !estAvant(c) && dernierDuJour(c, sorted);
+  const apresP = e.date > p.date || (e.date === p.date && pAvant);
+  const avantC = e.date < c.date || (e.date === c.date && cApres);
+  return apresP && avantC;
+}
 function livEntre(p, c, sorted) {
-  const cDernierDuJour = !sorted.some(e => e.type==='niveau' && e.date===c.date && sorted.indexOf(e) > sorted.indexOf(c));
   let liv = 0;
-  sorted.forEach(e => { if (e.type==='livraison' && e.date>p.date && (e.date<c.date || (e.date===c.date && cDernierDuJour))) liv += e.qty; });
+  sorted.forEach(e => { if (livDans(e, p, c, sorted)) liv += e.qty; });
   return liv;
 }
 
@@ -791,19 +804,77 @@ function updateChartNiveau(merged) {
   const isDark=matchMedia('(prefers-color-scheme:dark)').matches;
   const tc=isDark?'#B4B2A9':'#888780',gc=isDark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.06)';
   const niveaux=merged.filter(e=>e.type==='niveau'); if(!niveaux.length)return;
-  const labels=niveaux.map(e=>fmt(e.date)), data=niveaux.map(e=>cmToL(e.cm));
-  const livData=new Array(niveaux.length).fill(null);
-  merged.filter(e=>e.type==='livraison').forEach(e=>{
-    let idx=niveaux.findIndex(n=>n.date>e.date);
-    if(idx<0)idx=niveaux.length-1; else if(idx>0)idx--;
-    livData[idx]=(livData[idx]||0)+e.qty;
-  });
+  const {pts, livPts} = serieNiveau(merged);
+  const xMin=pts[0].x, xMax=Math.max(pts[pts.length-1].x, ...livPts.map(p=>p.x));
+  const seuilL=cmToL(seuilCm);
+  const fmtTs=t=>fmt(new Date(t).toISOString().slice(0,10));
   if(chartNiveau)chartNiveau.destroy();
-  chartNiveau=new Chart(document.getElementById('chartNiveau'),{type:'line',data:{labels,datasets:[
-    {label:'Niveau (L)',data,borderColor:'#185FA5',backgroundColor:'rgba(55,138,221,0.08)',fill:true,tension:0.3,pointRadius:4,pointBackgroundColor:'#185FA5',borderWidth:2,yAxisID:'y'},
-    {label:'Livraison (L)',data:livData,type:'bar',backgroundColor:'rgba(239,159,39,0.45)',borderColor:'#EF9F27',borderWidth:1,borderRadius:3,yAxisID:'y2'},
-    {label:'Seuil',data:niveaux.map(()=>cmToL(seuilCm)),borderColor:'#E24B4A',borderDash:[4,3],borderWidth:1.5,pointRadius:0,fill:false,yAxisID:'y'}
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tc,maxRotation:45,font:{size:11}},grid:{color:gc}},y:{ticks:{color:tc,callback:v=>v.toLocaleString('fr-FR')+' L',font:{size:11}},grid:{color:gc},beginAtZero:true,position:'left'},y2:{ticks:{color:'#BA7517',font:{size:10},callback:v=>v?v+'L':''},grid:{display:false},beginAtZero:true,position:'right',max:2000}}}});
+  chartNiveau=new Chart(document.getElementById('chartNiveau'),{type:'line',data:{datasets:[
+    {label:'Niveau',data:pts,borderColor:'#185FA5',backgroundColor:'rgba(55,138,221,0.08)',fill:true,tension:0,borderWidth:2,
+      pointRadius:ctx=>ctx.raw&&ctx.raw.est?0:3.5,pointHoverRadius:ctx=>ctx.raw&&ctx.raw.est?0:5,pointBackgroundColor:'#185FA5',
+      segment:{borderDash:ctx=>(ctx.p0.raw.est||ctx.p1.raw.est)?[4,3]:undefined}},
+    {label:'Livraison',data:livPts,showLine:false,pointStyle:'triangle',pointRadius:7,pointHoverRadius:9,
+      pointBackgroundColor:'#EF9F27',pointBorderColor:'#BA7517',borderWidth:1},
+    {label:'Seuil',data:[{x:xMin,y:seuilL},{x:xMax,y:seuilL}],borderColor:'#E24B4A',borderDash:[4,3],borderWidth:1.5,pointRadius:0,pointHoverRadius:0,fill:false}
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'nearest',intersect:true},
+    plugins:{legend:{display:false},tooltip:{filter:i=>i.datasetIndex!==2&&!(i.raw&&i.raw.est),callbacks:{
+      title:items=>items.length?fmtTs(items[0].raw.x):'',
+      label:i=>i.datasetIndex===1?`Livraison : ${i.raw.qty.toLocaleString('fr-FR')} L`
+        :`${i.raw.y.toLocaleString('fr-FR')} L (${i.raw.cm} cm)`}}},
+    scales:{
+      x:{type:'linear',min:xMin,max:xMax,ticks:{color:tc,maxRotation:45,font:{size:11},maxTicksLimit:8,
+        callback:v=>new Date(v).toLocaleDateString('fr-FR',{month:'short',year:'2-digit'})},grid:{color:gc}},
+      y:{ticks:{color:tc,callback:v=>v.toLocaleString('fr-FR')+' L',font:{size:11}},grid:{color:gc},beginAtZero:true}}}});
+}
+
+// Construit la courbe du niveau sur un vrai axe du temps.
+// Une livraison sans relevé « après » le même jour ajoute deux points estimés (avant / après livraison),
+// calculés avec la consommation moyenne de l'intervalle : la courbe montre alors un saut vertical
+// le jour de la livraison, en pointillés car estimé.
+function serieNiveau(merged) {
+  const ts=d=>new Date(d+'T12:00:00Z').getTime(), J=86400000, CAP=cmToL(CUVE_DIAM_M*100);
+  const clamp=v=>Math.round(Math.max(0,Math.min(CAP,v)));
+  const niv=merged.filter(e=>e.type==='niveau'), livs=merged.filter(e=>e.type==='livraison');
+  const pts=[], livPts=[], vues=new Set();
+  niv.forEach((c,i)=>{
+    if(i>0){
+      const p=niv[i-1], jours=(ts(c.date)-ts(p.date))/J;
+      const dedans=livs.filter(e=>livDans(e,p,c,merged));
+      if(dedans.length){
+        const liv=dedans.reduce((s,e)=>s+e.qty,0);
+        const r=jours>0?Math.max(0,cmToL(p.cm)+liv-cmToL(c.cm))/jours:0;
+        let cumul=0;
+        dedans.forEach(e=>{
+          vues.add(e);
+          const avant=clamp(cmToL(p.cm)-r*(ts(e.date)-ts(p.date))/J+cumul);
+          const releveApres=e.date===c.date;   // le relevé c a été pris juste après la livraison
+          const apres=releveApres?cmToL(c.cm):clamp(avant+e.qty);
+          pts.push({x:ts(e.date),y:avant,est:true});
+          if(!releveApres) pts.push({x:ts(e.date),y:apres,est:true});
+          livPts.push({x:ts(e.date),y:apres,qty:e.qty});
+          cumul+=e.qty;
+        });
+      }
+    }
+    pts.push({x:ts(c.date),y:cmToL(c.cm),cm:c.cm,est:false});
+  });
+  // Livraisons du même jour qu'un couple « avant / après » : le saut est déjà mesuré
+  livs.forEach(e=>{
+    if(vues.has(e))return;
+    const ap=niv.filter(n=>n.date===e.date);
+    if(ap.length&&!estAvant(ap[ap.length-1])){vues.add(e);livPts.push({x:ts(e.date),y:cmToL(ap[ap.length-1].cm),qty:e.qty});}
+  });
+  // Livraisons après le dernier relevé : niveau estimé avec la consommation moyenne
+  const der=niv[niv.length-1], g=computeGlobalConso(merged)||0;
+  let niveau=cmToL(der.cm), t0=ts(der.date);
+  livs.filter(e=>!vues.has(e)&&e.date>=der.date).forEach(e=>{
+    vues.add(e);
+    const avant=clamp(niveau-g*(ts(e.date)-t0)/J), apres=clamp(avant+e.qty);
+    pts.push({x:ts(e.date),y:avant,est:true},{x:ts(e.date),y:apres,est:true});
+    livPts.push({x:ts(e.date),y:apres,qty:e.qty});
+    niveau=apres; t0=ts(e.date);
+  });
+  return {pts, livPts};
 }
 
 function updateChartAnnuel(merged) {
