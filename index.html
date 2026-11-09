@@ -507,21 +507,21 @@ async function loadPrixFioul(forceRefresh = false) {
     const estVieux = !dernierDate || (new Date() - dernierDate) > 5 * 86400000;
 
     if (forceRefresh || estVieux) {
+      const avertir = msg => { zone.innerHTML = `<div class="alert-banner alert-warning" style="margin-bottom:1rem">⚠️ ${msg}</div>`; };
       try {
-        const r = await fetch('https://tqurezznmkhvzbktwnnz.supabase.co/functions/v1/fetch-prix-fioul');
-        if (r.ok) {
-          const result = await r.json();
-          if (result.data && result.data.length > 0) {
-            prixFioulData = result.data;
-            renderCours();
-            if (result.source === 'dgec_fresh') {
-              zone.innerHTML = `<div class="alert-banner alert-success" style="margin-bottom:1rem">✅ Prix mis à jour depuis la DGEC (${result.count} semaines chargées)</div>`;
-              setTimeout(() => zone.innerHTML = '', 4000);
-            }
-          }
+        const r = await fetch('/.netlify/functions/prix-fioul-maj');
+        const result = await r.json().catch(() => ({}));
+        if (r.ok && result.source !== 'supabase_cache' && !result.error) {
+          // Relire la base : on garde tout l'historique, pas seulement ce que la fonction vient de lire
+          prixFioulData = await sbGet('prix_fioul_dgec', `?date=gte.${dateStr}&order=date.asc`);
+          renderCours();
+          zone.innerHTML = `<div class="alert-banner alert-success" style="margin-bottom:1rem">✅ Cours mis à jour (${result.count} prix lus sur fioulmarket.fr)</div>`;
+          setTimeout(() => zone.innerHTML = '', 4000);
+        } else {
+          avertir(`Mise à jour impossible : ${result.error || ('HTTP ' + r.status)}. Affichage des derniers prix enregistrés.`);
         }
       } catch(e) {
-        console.warn('Fonction Netlify indisponible, utilisation du cache Supabase');
+        avertir(`Mise à jour impossible : ${e.message}. Affichage des derniers prix enregistrés.`);
       }
     }
 
